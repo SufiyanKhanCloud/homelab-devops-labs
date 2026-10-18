@@ -19,18 +19,31 @@ This roadmap tracks implementation and verification, not just planned ideas.
 - [x] Verify Docker DNS resolution.
 - [x] Create a PostgreSQL custom-format backup.
 - [x] Inspect the backup archive.
-- [ ] Restore the backup into a temporary database.
-- [ ] Verify the restored schema and data.
-- [ ] Migrate the setup to Docker Compose.
+- [x] Restore the backup into a temporary database.
+- [x] Verify the restored schema, data, and sequence state.
+- [x] Migrate the setup to Docker Compose.
+- [x] Verify application health, API behavior, and data persistence.
 
-## Phase 3: Monitoring
+## Phase 3: Container Security
+
+- [x] Scan the application image using Trivy.
+- [x] Generate and inspect a JSON vulnerability report.
+- [x] Summarize HIGH findings and unique CVEs.
+- [x] Apply Docker runtime hardening controls.
+- [x] Verify application behavior after hardening.
+- [ ] Investigate current vendor fixes for reported CVEs.
+- [ ] Rebuild the image after appropriate package updates.
+- [ ] Perform and document a post-remediation scan.
+- [ ] Evaluate Trivy integration into CI/CD.
+
+## Phase 4: Monitoring
 
 - [ ] Deploy Prometheus.
 - [ ] Deploy Grafana.
 - [ ] Build useful dashboards.
 - [ ] Configure and test an alert.
 
-## Phase 4: CI/CD
+## Phase 5: CI/CD
 
 - [ ] Implement automated build and test stages.
 - [ ] Configure a controlled deployment workflow.
