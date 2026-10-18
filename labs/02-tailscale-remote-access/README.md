@@ -90,6 +90,3 @@ establish the root cause of the separate Wi-Fi latency issue.
 
 Connectivity and remote SSH access tested. Boot persistence and
 post-reboot behavior remain to be verified.
-
-
-Tailscale README commit karne ke baad bas **“done”** likh dena. Phir hum Docker Networking par aage badhenge.
