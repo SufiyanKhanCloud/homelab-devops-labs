@@ -53,10 +53,11 @@ flowchart TD
 | Lab | Status |
 |---|---|
 | Linux Server Administration | In progress |
-| Tailscale Remote Access | Connectivity tested |
-| Docker Networking | Implemented; documentation pending |
-| PostgreSQL Backup and Restore | Backup created and inspected; restore test pending |
-| Docker Compose | Planned |
+| Tailscale Remote Access | Connectivity and SSH tested; reboot verification pending |
+| Docker Networking | Implemented and documented |
+| PostgreSQL Backup and Restore | Backup, restore, data comparison, and sequence verification completed |
+| Docker Compose | Migration and application verification completed |
+| Trivy Container Security | Image scan and runtime hardening completed; vulnerability remediation pending |
 | Monitoring | Planned |
 | CI/CD | Planned |
 
@@ -69,8 +70,10 @@ Only tested results will be described as completed. Planned work will remain cle
 ## Current Issues
 
 - Investigate Wi-Fi latency using measured evidence.
-- Verify Tailscale connectivity after a controlled server reboot.
-- Complete a PostgreSQL restore test and verify the restored data.
+- Verify Tailscale service startup and connectivity after a controlled reboot.
+- Investigate and remediate the reported container image vulnerabilities.
+- Perform a separate post-remediation Trivy scan.
+- Plan monitoring and CI/CD automation.
 
 ## Security
 
