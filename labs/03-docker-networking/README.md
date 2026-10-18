@@ -96,14 +96,19 @@ and database-level tests.
 - Inspect container configuration before sharing terminal output.
 - Never publish real database backups containing sensitive data.
 
-## Pending Work
+## Follow-up Work
 
-- [ ] Document the exact application and database configuration.
-- [ ] Verify database persistence after container recreation.
-- [ ] Migrate the lab to Docker Compose.
-- [ ] Add a repeatable connectivity test.
+- [x] Document the application and database configuration.
+- [x] Migrate the application and database setup to Docker Compose.
+- [x] Verify application-to-database connectivity.
+- [x] Verify application health and API responses.
+- [x] Verify that existing database records survived the Compose migration.
+
+See [Lab 05: Docker Compose](../05-docker-compose/README.md)
+for migration and verification details.
 
 ## Status
 
-Application-to-database connectivity and Docker name resolution tested.
-Additional persistence and automation tests remain pending.
+Docker networking and service-name resolution were tested.
+The application was subsequently migrated to Docker Compose, and
+application functionality and database records were verified.
