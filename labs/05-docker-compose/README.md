@@ -148,3 +148,10 @@ Final verification with `docker compose ps` showed both services healthy.
 Successfully migrated the existing Flask and PostgreSQL deployment to Docker Compose while preserving the database records and reusing the existing volume and network.
 
 The deployment was tested through application health checks, API queries, direct database queries, and an application restart.
+
+## Related Security Work
+
+The application was subsequently hardened with Docker runtime
+security controls and scanned for known image vulnerabilities.
+
+See [Lab 06: Trivy Vulnerability Scanning and Container Hardening](../06-trivy-container-security/README.md).
