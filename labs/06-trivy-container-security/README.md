@@ -52,7 +52,7 @@ Generate a JSON report:
 trivy image \
   --severity HIGH,CRITICAL \
   --format json \
-  --output trivy-final.json \
+  --output trivy-followup.json \
   notes-app:3
 ```
 
@@ -70,7 +70,7 @@ The existing Trivy report contains the following results:
 | CRITICAL findings | 0 |
 | Unique CVEs | 8 |
 | OS package findings | 44 |
-| Python dependency findings | 0 |
+| HIGH/CRITICAL Python dependency findings | 0 |
 
 All 44 findings in this report were associated with Debian OS packages.
 
@@ -177,7 +177,16 @@ PY
 
 ## 4. Docker Runtime Hardening
 
-After reviewing the vulnerability findings, runtime security controls were applied to reduce the application's attack surface.
+The image vulnerability scan and runtime hardening are separate
+security activities. The JSON report records image-package findings;
+it does not validate Docker runtime settings.
+
+The runtime hardening controls were verified separately through
+container inspection and application health, API, and persistence tests.
+
+The October 17 vulnerability report predates the separately
+documented runtime-hardening verification. It must not be
+interpreted as a post-hardening vulnerability scan.
 
 ### Non-Root User
 
@@ -248,7 +257,7 @@ The PostgreSQL service does not publish its database port directly on the host.
 Before changing the Compose configuration, preserve the previous version:
 
 ```bash
-cp compose.yaml compose.yaml.before-hardening
+cp compose.yaml "compose.yaml.before-hardening.$(date +%Y%m%d-%H%M%S)"
 ```
 
 Review the configuration:
@@ -257,6 +266,8 @@ Review the configuration:
 docker compose config
 ```
 
+Review the rendered configuration locally. Do not publish its
+output without checking for credentials and other sensitive values.
 Apply the configuration changes and recreate only the application service:
 
 ```bash
