@@ -10,7 +10,8 @@ A hands-on DevOps homelab documenting Linux administration, secure remote access
 - Configure secure remote access using Tailscale and SSH.
 - Understand Docker networking and containerized applications.
 - Implement and validate PostgreSQL backup and restore procedures.
-- Build toward monitoring and CI/CD automation.
+- Deploy and verify host monitoring with Prometheus, Node Exporter, Grafana, and CPU alerting.
+- Build toward CI/CD automation.
 
 ## Architecture
 
@@ -46,6 +47,8 @@ flowchart TD
 | Database | PostgreSQL |
 | Networking | Docker bridge network |
 | Persistence | Docker named volume |
+| Monitoring | Prometheus and Node Exporter |
+| Dashboards and alerting | Grafana and Prometheus alert rules |
 | Documentation | Markdown and Mermaid |
 
 ## Labs and Progress
@@ -58,7 +61,7 @@ flowchart TD
 | PostgreSQL Backup and Restore | Backup, restore, data comparison, and sequence verification completed |
 | Docker Compose | Migration and application verification completed |
 | Trivy Container Security | Image scan and runtime hardening completed; vulnerability remediation pending |
-| Monitoring | Planned |
+| Monitoring | Deployed; targets, dashboard, and CPU alert tested |
 | CI/CD | Planned |
 
 ## Engineering Approach
@@ -73,7 +76,8 @@ Only tested results will be described as completed. Planned work will remain cle
 - Verify Tailscale service startup and connectivity after a controlled reboot.
 - Investigate and remediate the reported container image vulnerabilities.
 - Perform a separate post-remediation Trivy scan.
-- Plan monitoring and CI/CD automation.
+- Document monitoring deployment and verification in a dedicated lab guide.
+- Plan and implement CI/CD automation.
 
 ## Security
 
