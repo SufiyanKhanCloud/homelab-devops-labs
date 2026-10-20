@@ -38,10 +38,11 @@ This roadmap tracks implementation and verification, not just planned ideas.
 
 ## Phase 4: Monitoring
 
-- [ ] Deploy Prometheus.
-- [ ] Deploy Grafana.
-- [ ] Build useful dashboards.
-- [ ] Configure and test an alert.
+- [x] Deploy Prometheus and Node Exporter.
+- [x] Deploy Grafana and configure its Prometheus data source.
+- [x] Build and verify the Node Exporter Full dashboard.
+- [x] Configure and test the CPU alert rule, including a threshold simulation.
+- [ ] Configure alert notifications.
 
 ## Phase 5: CI/CD
 
