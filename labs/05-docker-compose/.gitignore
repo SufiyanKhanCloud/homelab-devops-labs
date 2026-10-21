@@ -1,0 +1,12 @@
+.env
+.env.*
+!.env.example
+backups/
+__pycache__/
+*.pyc
+
+# Local security scan reports
+trivy-final.json
+
+# Local configuration backups
+compose.yaml.before-hardening
