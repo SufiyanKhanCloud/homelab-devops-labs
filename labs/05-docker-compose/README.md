@@ -155,3 +155,14 @@ The application was subsequently hardened with Docker runtime
 security controls and scanned for known image vulnerabilities.
 
 See [Lab 06: Trivy Vulnerability Scanning and Container Hardening](../06-trivy-container-security/README.md).
+
+## PostgreSQL Backup Automation
+
+The backup script creates timestamped PostgreSQL custom-format dumps, validates
+the archives, and retains the seven newest backups. The current homelab setup
+uses a systemd oneshot service to trigger the backup on startup.
+
+See [PostgreSQL Backup Automation](../../docs/postgres-backup-automation.md)
+for the workflow, configuration, validation results, and known limitations.
+
+**Note:** Automatic execution after a real server reboot has not yet been verified.
