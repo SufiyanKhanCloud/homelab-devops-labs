@@ -13,7 +13,8 @@ the original.
 - Backup format: PostgreSQL custom archive
 - Storage: Local backup directory
 - Original database: `postgres`
-- Temporary restore database: `restore_test`
+- Temporary restore container: `restore-test-db`
+- Restore target database: `postgres`
 
 Sensitive database contents, credentials, and actual backup files
 are intentionally excluded from this repository.
@@ -58,18 +59,15 @@ The original database was left unchanged during this test. The restore succeeded
 
 **Scope limitation:** This test verifies the specific backup, table data, and sequence state checked during the exercise. It does not prove that every database object, application dependency, or future backup can be recovered successfully.
 
-The backup was restored into the `postgres` database inside a separate temporary PostgreSQL Docker container named `restore-test-db`. The container was isolated from the network, and the original database was left unchanged.
-
 ### Validation Results
 
-- [x] Create a PostgreSQL custom-format backup.
-- [x] Inspect the archive using `pg_restore --list`.
-- [x] Create a temporary restore database.
-- [x] Restore the archive into the temporary database.
+- [x] Inspect the backup archive using `pg_restore --list`.
+- [x] Start an isolated temporary PostgreSQL 16 container.
+- [x] Restore the backup using `pg_restore`.
 - [x] Verify that the restored `public.notes` table exists.
-- [x] Confirm that the original and restored tables each contain 2 rows.
-- [x] Compare record IDs and MD5 hashes of the text fields.
-- [x] Verify the restored sequence state.
+- [x] Confirm that both expected records were recovered.
+- [x] Compare the recovered record IDs and text values with the original.
+- [x] Remove the temporary restore container after verification.
 
 ### Data Comparison
 
