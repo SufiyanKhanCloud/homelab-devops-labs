@@ -104,8 +104,9 @@ The following checks passed:
 - Successful creation and archive validation of a PostgreSQL dump.
 - Verification of the recorded successful-backup date.
 - Verification that a second script invocation on the same day skips the backup.
-
-Automatic execution following an actual server reboot has not yet been verified.
+- Verified automatic systemd service startup after a real server reboot.
+- Confirmed the five-minute startup delay completed and the backup script executed.
+- Confirmed the script skipped a duplicate backup because a successful backup was already recorded for that day.
 
 ## Limitations and Future Improvements
 
@@ -116,7 +117,6 @@ Automatic execution following an actual server reboot has not yet been verified.
 
 Potential improvements include:
 
-- Verifying automatic execution after a real reboot.
 - Restoring the latest backup into an isolated PostgreSQL instance.
 - Copying backups to a separate machine or storage service.
 - Adding failure monitoring and notifications.

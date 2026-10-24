@@ -165,4 +165,4 @@ uses a systemd oneshot service to trigger the backup on startup.
 See [PostgreSQL Backup Automation](../../docs/postgres-backup-automation.md)
 for the workflow, configuration, validation results, and known limitations.
 
-**Note:** Automatic execution after a real server reboot has not yet been verified.
+**Validation:** Automatic service startup after a real server reboot has been verified. The script correctly skipped creating another backup because a successful backup was already recorded for that day.
