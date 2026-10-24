@@ -43,8 +43,22 @@ succeed or that all application data is recoverable.
 
 ## Restore and Verification
 
-The backup was restored into a separate temporary database named
-`restore_test`, leaving the original database unchanged.
+### Actual Recovery Test
+
+On 24 October 2026, I tested the existing PostgreSQL custom-format backup in an isolated temporary Docker container.
+
+- **Backup tested:** `notes-db-2026-10-15-202858.dump`
+- **Database version:** PostgreSQL 16
+- **Isolation:** The temporary container was started with `--network none`, preventing network access from that container.
+- **Restore method:** `pg_restore` with `--no-owner` and `--no-privileges`.
+- **Verification:** Queried the restored `public.notes` table and compared the recovered record IDs and text values with the original database.
+- **Cleanup:** Removed the temporary restore container after verification.
+
+The original database was left unchanged during this test. The restore succeeded, and the recovered records matched the expected data.
+
+**Scope limitation:** This test verifies the specific backup, table data, and sequence state checked during the exercise. It does not prove that every database object, application dependency, or future backup can be recovered successfully.
+
+The backup was restored into the `postgres` database inside a separate temporary PostgreSQL Docker container named `restore-test-db`. The container was isolated from the network, and the original database was left unchanged.
 
 ### Validation Results
 
