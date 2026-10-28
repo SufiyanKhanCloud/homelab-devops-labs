@@ -2,7 +2,7 @@
 
 **Build it. Test it. Break it safely. Understand why it works.**
 
-A hands-on DevOps homelab documenting Linux administration, secure remote access, containerization, database reliability, troubleshooting, and automation.
+A hands-on DevOps homelab documenting Linux administration, secure remote access, containerization, database reliability, monitoring, container security, troubleshooting, and automation.
 
 ## Project Goals
 
@@ -11,7 +11,8 @@ A hands-on DevOps homelab documenting Linux administration, secure remote access
 - Understand Docker networking and containerized applications.
 - Implement and validate PostgreSQL backup and restore procedures.
 - Deploy and verify host monitoring with Prometheus, Node Exporter, Grafana, and CPU alerting.
-- Build toward CI/CD automation.
+- Scan container images for vulnerabilities and apply runtime hardening.
+- Build toward CI/CD automation with automated testing and controlled deployments.
 
 ## Architecture
 
@@ -33,7 +34,7 @@ flowchart TD
     DB --> Volume
 ```
 
-*Logical architecture. Private network details and credentials are intentionally omitted.*
+*Logical application architecture. Private network details and credentials are intentionally omitted. Monitoring and security tooling are documented separately in their respective labs.*
 
 ## Technology Stack
 
@@ -42,33 +43,42 @@ flowchart TD
 | Server | Ubuntu Server 24.04 LTS |
 | Client | Ubuntu Linux |
 | Remote access | Tailscale and SSH |
-| Containers | Docker |
+| Containers | Docker and Docker Compose |
 | Application | Flask and Gunicorn |
 | Database | PostgreSQL |
 | Networking | Docker bridge network |
 | Persistence | Docker named volume |
 | Monitoring | Prometheus and Node Exporter |
 | Dashboards and alerting | Grafana and Prometheus alert rules |
+| Container security | Trivy |
 | Documentation | Markdown and Mermaid |
+| Version control | Git and GitHub |
 
 ## Labs and Progress
 
 | Lab | Status |
 |---|---|
 | Linux Server Administration | In progress |
-| Tailscale Remote Access | Connectivity and SSH tested; reboot verification pending |
+| Tailscale Remote Access | Connectivity, SSH, MagicDNS, and post-reboot access verified |
 | Docker Networking | Implemented and documented |
 | PostgreSQL Backup and Restore | Backup, restore, data comparison, and sequence verification completed |
-| Docker Compose | Migration and application verification completed |
+| Docker Compose | Migration, health checks, security controls, and application verification completed |
 | Trivy Container Security | Image scan and runtime hardening completed; vulnerability remediation pending |
-| Monitoring | Deployed; targets, dashboard, and CPU alert tested |
+| Monitoring | Deployed; scrape targets and dashboard verified; CPU alert lifecycle tested |
 | CI/CD | Planned |
 
 ## Engineering Approach
 
-Each lab will document its objective, architecture, implementation, verification, troubleshooting, security considerations, and limitations.
+Each lab aims to document its objective, architecture, implementation, verification, troubleshooting, security considerations, and limitations.
 
-Only tested results will be described as completed. Planned work will remain clearly identified as planned.
+The project follows an evidence-based approach:
+
+- Only verified results are described as completed.
+- Planned work and known limitations remain clearly identified.
+- Backup and restore procedures are tested rather than assumed to work.
+- Security findings are investigated before remediation is attempted.
+- Changes are validated before being treated as successful.
+- Public documentation is reviewed for secrets and sensitive infrastructure details.
 
 ## Current Issues
 
@@ -82,13 +92,21 @@ Only tested results will be described as completed. Planned work will remain cle
 
 This repository is intended for sanitized documentation and safe examples.
 
-Never commit credentials, private keys, sensitive logs, database backups containing real data, or unnecessary infrastructure identifiers.
+Never commit:
+
+- Passwords, API tokens, or other credentials.
+- Private SSH keys or sensitive access configuration.
+- Logs containing unnecessary sensitive information.
+- Database backups containing real or private data.
+- Unnecessary private network identifiers or infrastructure details.
+
+Use least privilege, restrict unnecessary network exposure, and verify changes before applying them to running services.
 
 See [SECURITY.md](SECURITY.md) for security guidelines.
 
 ## Roadmap
 
-See [ROADMAP.md](ROADMAP.md) for planned milestones.
+See [ROADMAP.md](ROADMAP.md) for implementation progress, pending verification, and planned milestones.
 
 ## Author
 
