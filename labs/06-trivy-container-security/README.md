@@ -2,18 +2,21 @@
 
 ## Overview
 
-This lab focuses on scanning a Docker container image for known vulnerabilities and applying runtime security controls to reduce the container's attack surface.
+This lab focuses on identifying known vulnerabilities in a Docker image using Trivy and reducing the runtime attack surface through Docker security controls.
 
-The target application is a Flask-based notes application running with PostgreSQL through Docker Compose on a self-hosted Ubuntu Server.
+The target is a Flask-based notes application running with PostgreSQL through Docker Compose on a self-hosted Ubuntu Server.
 
-**Objectives:**
+The lab covers vulnerability assessment, machine-readable reporting, container hardening, application verification, and remediation planning.
+
+### Objectives
+
 - Scan a Docker image using Trivy.
-- Identify and summarize OS package vulnerabilities.
-- Inspect vulnerability findings and available fix-version information.
-- Generate a machine-readable JSON report.
-- Apply Docker runtime hardening controls.
-- Verify that the application remains functional after hardening.
-- Document findings, limitations, and potential remediation steps.
+- Analyze OS package vulnerabilities and severity classifications.
+- Identify unique CVEs and inspect available fixed-version information.
+- Generate and inspect a JSON vulnerability report.
+- Apply Docker runtime security controls.
+- Verify the effective security configuration of the running container.
+- Document findings, limitations, and future remediation steps.
 
 ## Environment
 
@@ -28,7 +31,13 @@ The target application is a Flask-based notes application running with PostgreSQ
 | Base OS identified by Trivy | Debian 13.7 |
 | Database | PostgreSQL 16 |
 | Application port | `127.0.0.1:5000` |
-| Vulnerability report | `trivy-final.json` |
+| Historical JSON report | `trivy-final.json` |
+
+The historical JSON report is stored on the homelab server at:
+
+`/home/sufiyan/lab/notes-app/trivy-final.json`
+
+The report is not stored in this GitHub repository.
 
 ## 1. Vulnerability Scanning with Trivy
 
@@ -46,7 +55,7 @@ Scan for HIGH and CRITICAL vulnerabilities:
 trivy image --severity HIGH,CRITICAL notes-app:3
 ```
 
-Generate a JSON report:
+Generate a machine-readable JSON report:
 
 ```bash
 trivy image \
@@ -56,13 +65,23 @@ trivy image \
   notes-app:3
 ```
 
-The existing report was generated on **October 17, 2026, at 12:44:36 PKT**.
+The JSON output file is created in the current working directory unless an absolute path is specified.
 
-The report identifies the scanned artifact as `notes-app:3` and records the image ID associated with that scan.
+**Important:** The command above generates a new report. It does not modify the historical `trivy-final.json` report.
 
-## 2. Scan Results
+### Historical Scan Details
 
-The existing Trivy report contains the following results:
+The saved report records the scan timestamp as:
+
+`2026-10-17T12:44:36.159270286+05:00`
+
+The artifact was identified as `notes-app:3`, with the image ID recorded in the report metadata.
+
+These results represent the historical scan. They should not be interpreted as the current vulnerability status of a newly rebuilt image.
+
+## 2. Historical Scan Results
+
+The saved Trivy report contains the following findings:
 
 | Metric | Result |
 |---|---:|
@@ -72,13 +91,15 @@ The existing Trivy report contains the following results:
 | OS package findings | 44 |
 | HIGH/CRITICAL Python dependency findings | 0 |
 
-All 44 findings in this report were associated with Debian OS packages.
+All 44 findings were associated with Debian OS packages in the saved report.
 
-No HIGH or CRITICAL findings were reported for Python dependencies in this scan.
+No HIGH or CRITICAL Python dependency findings were reported in that scan.
+
+A vulnerability finding is not necessarily equivalent to a unique CVE. Multiple installed packages can be associated with the same CVE.
 
 ### Unique CVEs
 
-The report identified these eight unique CVEs:
+The report identified these eight unique CVE identifiers:
 
 - CVE-2025-69720
 - CVE-2026-16742
@@ -89,39 +110,55 @@ The report identified these eight unique CVEs:
 - CVE-2026-78410
 - CVE-2026-9538
 
-### Affected Package Groups
+These identifiers are recorded from the historical report. Their current status and available remediation should be checked against current vendor security advisories before making upgrade decisions.
+
+### Findings by Package Group
+
+The package-level results were grouped as follows:
 
 | Package group | Findings |
 |---|---:|
 | util-linux-related packages | 36 |
 | ncurses packages | 4 |
 | systemd and udev libraries | 2 |
-| libacl1 | 1 |
-| perl-base | 1 |
+| `libacl1` | 1 |
+| `perl-base` | 1 |
 | **Total** | **44** |
 
-The same CVE can affect multiple installed packages. Therefore, 44 package-level findings do not represent 44 unique CVEs.
+The util-linux-related group includes packages such as `bsdutils`, `libblkid1`, `liblastlog2-2`, `libmount1`, `libsmartcols1`, `libuuid1`, `login`, `mount`, and `util-linux`.
+
+The ncurses group includes `libncursesw6`, `libtinfo6`, `ncurses-base`, and `ncurses-bin`.
+
+The systemd and udev group includes `libsystemd0` and `libudev1`.
 
 ### Fixed-Version Information
 
-The inspected report did not list a fixed version for any of the 44 findings.
+The saved report did not list a fixed version for any of the 44 findings.
 
-This does not establish that no vendor fix exists. It means the report did not provide a fixed version for those findings at the time of the scan.
+This means that the `FixedVersion` field was absent or empty in the historical report. It does **not** establish that no vendor fix exists.
 
-Further investigation against current Debian security advisories and package repositories would be required before deciding on package upgrades or other remediation.
+Further investigation against current Debian security advisories and package repositories is required to determine whether updated packages are available.
 
 ## 3. Inspecting the JSON Report
 
-The report can be inspected programmatically without printing the entire JSON file.
+The following commands are intended to run on the homelab server, where the historical report is stored.
 
-Count the reported vulnerabilities by severity:
+Change to the application directory:
+
+```bash
+cd /home/sufiyan/lab/notes-app
+```
+
+### Count Findings by Severity
 
 ```bash
 python3 - <<'PY'
 import json
 from collections import Counter
 
-with open("trivy-final.json") as f:
+path = "trivy-final.json"
+
+with open(path) as f:
     report = json.load(f)
 
 counts = Counter()
@@ -130,13 +167,15 @@ for result in report.get("Results", []):
     for vulnerability in result.get("Vulnerabilities") or []:
         counts[vulnerability.get("Severity", "UNKNOWN")] += 1
 
-print("Vulnerability counts:")
+print("Artifact:", report.get("ArtifactName"))
+print("Severity counts:")
+
 for severity, count in sorted(counts.items()):
     print(f"{severity}: {count}")
 PY
 ```
 
-Count unique CVEs:
+### Count Unique CVEs
 
 ```bash
 python3 - <<'PY'
@@ -156,7 +195,7 @@ print("Unique CVEs:", len(cves))
 PY
 ```
 
-Inspect the report timestamp and artifact information:
+### Inspect Report Metadata
 
 ```bash
 python3 - <<'PY'
@@ -175,45 +214,50 @@ print("Image ID:", metadata.get("ImageID"))
 PY
 ```
 
+These commands read the existing JSON report without printing the full report or changing the running application.
+
 ## 4. Docker Runtime Hardening
 
-The image vulnerability scan and runtime hardening are separate
-security activities. The JSON report records image-package findings;
-it does not validate Docker runtime settings.
+Image vulnerability scanning and runtime hardening address different security concerns.
 
-The runtime hardening controls were verified separately through
-container inspection and application health, API, and persistence tests.
+The historical Trivy report identifies known vulnerabilities associated with image packages. It does not establish whether the container's runtime security controls are configured correctly.
 
-The October 17 vulnerability report predates the separately
-documented runtime-hardening verification. It must not be
-interpreted as a post-hardening vulnerability scan.
+The following controls were applied to the application container and verified separately.
 
-### Non-Root User
+### Non-Root Execution
 
-The application runs under a dedicated non-root user named `app`.
+The Dockerfile creates a dedicated system user:
 
-Running as a non-root user reduces the privileges available to a compromised application process.
+```dockerfile
+USER app
+```
+
+The application runs as the non-root user `app`, with UID `10001`.
+
+Running an application without root privileges limits the privileges available to the application process if it is compromised.
 
 ### Read-Only Root Filesystem
 
-The application container uses a read-only root filesystem:
+The Compose configuration enables:
 
 ```yaml
 read_only: true
 ```
 
-This prevents normal writes to the container's root filesystem. Applications that require writable paths must be provided with explicitly configured writable mounts or temporary filesystems.
+This makes the container's root filesystem read-only. Writable locations must be explicitly provided when required.
+
+The application uses a temporary filesystem for `/tmp`.
 
 ### Dropping Linux Capabilities
 
-The container drops all Linux capabilities:
+The application service drops all Linux capabilities:
 
 ```yaml
 cap_drop:
   - ALL
 ```
 
-This removes the container's default Linux capability set. Additional capabilities should only be granted when there is a demonstrated requirement.
+This removes the container's Linux capability set. Additional capabilities should only be granted if a demonstrated application requirement exists.
 
 ### Preventing Privilege Escalation
 
@@ -224,11 +268,11 @@ security_opt:
   - no-new-privileges:true
 ```
 
-This prevents processes inside the container from gaining additional privileges through mechanisms such as set-user-ID and set-group-ID executables.
+This prevents processes from gaining additional privileges through supported mechanisms such as set-user-ID and set-group-ID executables.
 
 ### Restricting Temporary Storage
 
-The application uses a temporary filesystem for `/tmp`:
+The application uses the following temporary filesystem configuration:
 
 ```yaml
 tmpfs:
@@ -237,9 +281,7 @@ tmpfs:
 
 This provides temporary writable storage while applying the `noexec` and `nosuid` mount options.
 
-The application must be tested to ensure that its temporary-storage requirements are satisfied.
-
-### Localhost-Only Port Binding
+### Restricting Network Exposure
 
 The application port is bound to the host's loopback interface:
 
@@ -248,47 +290,60 @@ ports:
   - "127.0.0.1:5000:5000"
 ```
 
-This limits direct access through the host's external network interfaces. Remote access requires an appropriate access path, such as an authenticated reverse proxy or VPN.
+This restricts direct host-port exposure to the loopback interface. Remote access requires an appropriate access path, such as an authenticated reverse proxy or VPN.
 
 The PostgreSQL service does not publish its database port directly on the host.
 
-## 5. Applying the Hardening Configuration
+### Other Application Container Settings
 
-Before changing the Compose configuration, preserve the previous version:
+The application image uses:
+
+- Python 3.12 slim as its base image.
+- Gunicorn with two workers.
+- A Docker health check targeting `/health`.
+- Environment variables for database connection settings.
+
+The database service has its own health check using `pg_isready`.
+
+These controls improve the deployment's security posture but do not eliminate all container, host, application, or supply-chain risks.
+
+## 5. Verifying Runtime Security Settings
+
+The running application container was inspected using Docker:
 
 ```bash
-cp compose.yaml "compose.yaml.before-hardening.$(date +%Y%m%d-%H%M%S)"
+docker inspect notes-app-app-1 \
+  --format 'User={{.Config.User}} ReadonlyRootfs={{.HostConfig.ReadonlyRootfs}} CapDrop={{json .HostConfig.CapDrop}} SecurityOpt={{json .HostConfig.SecurityOpt}}'
 ```
 
-Review the configuration:
+### Verified Output
 
-```bash
-docker compose config
+```text
+User=app ReadonlyRootfs=true CapDrop=["ALL"] SecurityOpt=["no-new-privileges:true"]
 ```
 
-Review the rendered configuration locally. Do not publish its
-output without checking for credentials and other sensitive values.
-Apply the configuration changes and recreate only the application service:
+This confirms that the inspected running container had the following settings:
 
-```bash
-docker compose up -d --no-deps app
-```
+| Security control | Observed value | Status |
+|---|---|---|
+| Container user | `app` | Verified |
+| Read-only root filesystem | `true` | Verified |
+| Dropped capabilities | `ALL` | Verified |
+| Privilege escalation protection | `no-new-privileges:true` | Verified |
 
-The `--no-deps` option avoids recreating dependent services as part of this application-service operation.
+This inspection confirms the effective settings returned by Docker for the running container. It is not a complete security audit and does not prove that the image contains no vulnerabilities.
 
-**Note:** The commands above describe the configuration workflow. The hardening changes were applied and tested separately from the October 17 vulnerability report. That report should not be treated as a post-hardening scan.
+## 6. Application Verification
 
-## 6. Verification
+After runtime hardening, the application was checked to ensure it remained operational.
 
-After applying runtime hardening, verify that the application and database remain operational.
-
-Check container status:
+### Check Container Status
 
 ```bash
 docker ps --format 'table {{.Names}}\t{{.Status}}'
 ```
 
-Inspect the application health status:
+### Check Application Health
 
 ```bash
 docker inspect \
@@ -296,7 +351,7 @@ docker inspect \
   notes-app-app-1
 ```
 
-Inspect the database health status:
+### Check Database Health
 
 ```bash
 docker inspect \
@@ -304,84 +359,95 @@ docker inspect \
   notes-app-db-1
 ```
 
-Check the application locally:
+### Test the Application Health Endpoint
 
 ```bash
-curl -i http://127.0.0.1:5000/
+curl -i http://127.0.0.1:5000/health
 ```
 
-Use the application's actual health endpoint instead if the root route is not designed for health checks.
+### Test the Notes API
 
-Check the published port bindings:
+```bash
+curl -s http://127.0.0.1:5000/notes
+```
+
+### Check Published Ports
 
 ```bash
 docker port notes-app-app-1
 ```
 
-Review the effective runtime configuration without dumping the entire container inspection output:
+The application health endpoint, API behavior, and data persistence were verified after the runtime hardening changes.
 
-```bash
-docker inspect notes-app-app-1 \
-  --format 'User={{.Config.User}} ReadonlyRootfs={{.HostConfig.ReadonlyRootfs}} CapDrop={{json .HostConfig.CapDrop}} SecurityOpt={{json .HostConfig.SecurityOpt}}'
-```
+These application checks complement the runtime inspection: one checks application behavior, while the other checks selected container configuration settings.
 
-The expected configuration includes a non-root application user, a read-only root filesystem, dropped capabilities, and the `no-new-privileges` security option.
+## 7. Understanding the Security Results
 
-Application health, API behavior, and data persistence were verified after the runtime hardening changes.
+### Image Vulnerability Scanning
 
-## 7. Understanding the Results
+Trivy helps identify known vulnerabilities associated with installed image packages.
 
-Vulnerability scanning and runtime hardening address different aspects of container security.
+The findings can be used to:
 
-**Image vulnerability scanning:**
-- Identifies known vulnerabilities associated with installed packages.
-- Helps prioritize investigation and remediation.
-- Provides a record of findings for a particular scan and image.
+- Prioritize security investigation.
+- Identify potentially affected packages.
+- Review CVE identifiers and severity classifications.
+- Check whether fixed-version information is available.
+- Preserve machine-readable scan evidence.
 
-**Runtime hardening:**
-- Reduces the privileges available to the application.
-- Limits filesystem write access.
-- Removes unnecessary Linux capabilities.
-- Restricts privilege escalation.
-- Limits direct network exposure.
+### Runtime Hardening
 
-Runtime hardening does not remove vulnerable packages from the image. Image remediation requires separate investigation, package updates or base-image changes, a rebuild, and another scan.
+Docker runtime controls help reduce the privileges and resources available to a running application.
 
-Similarly, a scan with no reported findings would not prove that an image is completely secure.
+The controls used in this lab include non-root execution, a read-only root filesystem, dropped Linux capabilities, privilege-escalation restrictions, temporary storage restrictions, and loopback-only port binding.
 
-## 8. Limitations and Next Steps
+### Why Both Are Necessary
 
-The existing scan identified 44 HIGH findings across eight unique CVEs in Debian OS packages.
+Runtime hardening does not remove vulnerable packages from an image.
 
-The following work remains appropriate for future iterations:
+Similarly, rebuilding an image with updated packages does not automatically guarantee that the resulting container has appropriate runtime restrictions.
 
-1. Review the CVEs against current Debian security advisories.
-2. Determine whether patched package versions are available.
-3. Update the base image and OS packages where appropriate.
+A more complete workflow combines image scanning, package remediation, image rebuilding, runtime hardening, and post-change functional verification.
+
+## 8. Limitations and Future Remediation
+
+The saved scan is historical. Its results should not be treated as a current assessment of a newly rebuilt image.
+
+The following activities remain future work:
+
+1. Review the eight CVEs against current Debian security advisories.
+2. Determine whether updated package versions are available.
+3. Update the base image or affected packages where appropriate.
 4. Rebuild the application image.
 5. Scan the rebuilt image using an updated vulnerability database.
-6. Compare the new findings with the existing report.
-7. Test application functionality and persistence after rebuilding.
-8. Consider adding vulnerability scanning to the CI pipeline.
-9. Define a policy for failing builds when specified vulnerability thresholds are exceeded.
+6. Compare the new findings with the historical report.
+7. Test application functionality and database persistence after rebuilding.
+8. Consider integrating Trivy into the CI/CD pipeline.
+9. Define a vulnerability policy for failing builds when specified severity thresholds are exceeded.
 
-The existing JSON report is retained as evidence of the October 17 scan. A later scan should be saved separately when comparing findings over time.
+The historical report should be retained as evidence of the October 17 scan. Any subsequent scan should be saved separately so the results can be compared over time.
+
+No post-remediation scan is claimed in this lab documentation.
 
 ## Key Takeaways
 
-- Trivy can identify known vulnerabilities in container images and export machine-readable reports.
-- Package-level finding counts and unique CVE counts represent different measurements.
-- Vulnerabilities in OS packages require investigation even when application-language dependencies have no reported findings.
-- Runtime hardening reduces attack surface but does not patch vulnerable packages.
-- Reproducible scans, preserved reports, and post-change verification help establish a reliable security workflow.
+- Trivy can identify known vulnerabilities in container images and generate machine-readable reports.
+- Package-level findings and unique CVEs represent different measurements.
+- A missing fixed-version field does not prove that no vendor fix exists.
+- Runtime hardening and image vulnerability remediation are separate activities.
+- Docker inspection can verify selected runtime configuration settings.
+- Application health checks and API tests help confirm that security changes have not broken the application.
+- Rebuilding and rescanning are necessary to assess whether package remediation reduced the reported findings.
 
 ## Lab Status
 
-- [x] Scan the Docker image using Trivy.
+- [x] Scan the application image using Trivy.
 - [x] Generate and inspect a JSON vulnerability report.
-- [x] Summarize severity counts and unique CVEs.
+- [x] Verify severity counts and unique CVEs from the saved report.
+- [x] Inspect package-level findings and fixed-version information.
 - [x] Apply Docker runtime hardening controls.
-- [x] Verify application health and functionality after hardening.
+- [x] Verify runtime security settings using Docker inspection.
+- [x] Verify application health, API behavior, and persistence after hardening.
 - [ ] Investigate current vendor fixes for the reported CVEs.
 - [ ] Rebuild the image after appropriate package updates.
 - [ ] Perform and document a separate post-remediation scan.
@@ -390,4 +456,4 @@ The existing JSON report is retained as evidence of the October 17 scan. A later
 ---
 
 **Environment:** Self-hosted Ubuntu Server homelab  
-**Focus:** Container security, vulnerability assessment, Docker hardening, and verification
+**Focus:** Container security, vulnerability assessment, runtime hardening, and verification
