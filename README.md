@@ -73,11 +73,10 @@ Only tested results will be described as completed. Planned work will remain cle
 ## Current Issues
 
 - Investigate Wi-Fi latency using measured evidence.
-- Verify Tailscale service startup and connectivity after a controlled reboot.
 - Investigate and remediate the reported container image vulnerabilities.
-- Perform a separate post-remediation Trivy scan.
-- Document monitoring deployment and verification in a dedicated lab guide.
-- Plan and implement CI/CD automation.
+- Perform and document a post-remediation Trivy scan.
+- Configure and test monitoring alert notifications.
+- Implement CI/CD automation with automated testing and a controlled deployment workflow.
 
 ## Security
 
