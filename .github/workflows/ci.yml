@@ -23,7 +23,7 @@ jobs:
 
       - name: Run tests
         working-directory: labs/05-docker-compose
-        run: python -m pytest test_app.py -v
+        run: python -m pytest --cov=app --cov-report=term-missing -v test_app.py
 
       - name: Build Docker image
         working-directory: labs/05-docker-compose

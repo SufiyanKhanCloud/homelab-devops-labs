@@ -75,3 +75,25 @@ def test_add_note_database_error():
     assert response.get_json() == {
         "error": "Service temporarily unavailable"
     }
+
+
+def test_get_conn_uses_environment_configuration():
+    with patch.dict(
+        "os.environ",
+        {
+            "DB_HOST": "localhost",
+            "DB_NAME": "notes_db",
+            "DB_USER": "notes_user",
+            "DB_PASSWORD": "test-password",
+        },
+    ), patch("app.psycopg.connect") as mock_connect:
+        connection = app.get_conn()
+
+    assert connection is mock_connect.return_value
+    mock_connect.assert_called_once_with(
+        host="localhost",
+        dbname="notes_db",
+        user="notes_user",
+        password="test-password",
+        connect_timeout=3,
+    )

@@ -45,3 +45,7 @@ venv/
 *.tfvars
 !*.tfvars.example
 crash.log
+
+# Test coverage
+.coverage
+htmlcov/
