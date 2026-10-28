@@ -2,54 +2,109 @@
 
 ## Objective
 
-Migrate a manually managed Flask and PostgreSQL application to Docker Compose while preserving existing database data.
+Migrate an existing Flask and PostgreSQL application from manually managed containers to Docker Compose while preserving database data.
+
+This lab covers multi-container orchestration, service discovery, persistent storage, health checks, environment-based configuration, container hardening, and deployment verification.
 
 ## Architecture
 
-- **Application:** Flask with Gunicorn
-- **Application image:** `notes-app:3`
-- **Database:** PostgreSQL 16
-- **Orchestration:** Docker Compose
-- **Persistent storage:** Existing external Docker volume `pgdata`
-- **Network:** Existing external Docker network `notes-net`
-- **Application port:** `127.0.0.1:5000`
+| Component | Configuration |
+|---|---|
+| Application | Flask |
+| WSGI server | Gunicorn |
+| Python runtime | Python 3.12 |
+| Application image | `notes-app:3` |
+| Database | PostgreSQL 16 |
+| Orchestration | Docker Compose |
+| Application port | `127.0.0.1:5000` |
+| Database volume | Existing external Docker volume `pgdata` |
+| Application network | Existing external Docker network `notes-net` |
+| Application dependencies | Flask, Psycopg, Gunicorn |
+
+### Service Communication
+
+The Compose project defines two services:
+
+- **`app`**: Runs the Flask application using Gunicorn.
+- **`db`**: Runs PostgreSQL 16 and stores its data in the existing `pgdata` volume.
+
+The services communicate over the external `notes-net` network. The application uses the Compose service name `db` as its database hostname.
+
+The application port is bound to the host's loopback interface. This makes it accessible locally on the server without directly publishing port `5000` on every host network interface.
 
 ## Implementation
 
-### 1. Created a protected environment file
+### 1. Protected Environment Configuration
 
-Created a local `.env` file containing the application and PostgreSQL password variables.
+A local `.env` file stores the environment variables used by Docker Compose.
 
-Set its permissions to `600` so only the file owner can read or modify it.
+The configuration requires:
 
-The real `.env` file is excluded from Git using `.gitignore`. Credentials are not included in this repository documentation.
+- `POSTGRES_PASSWORD` for PostgreSQL initialization.
+- `DB_PASSWORD` for the application's database connection.
 
-### 2. Defined the Compose services
+The variables are kept separate in the Compose configuration, so their values must be managed consistently with the database's actual credentials.
 
-Created `compose.yaml` with two services:
+The `.env` file has restrictive permissions of `600` and is excluded from Git through `.gitignore`.
 
-- `app`: Builds the Flask application image and runs Gunicorn.
-- `db`: Runs PostgreSQL 16.
+Credentials are not included in this repository.
 
-The application uses the Compose service name `db` as its database hostname.
+### 2. Defined the Compose Services
 
-### 3. Added health checks and startup dependency handling
+The `compose.yaml` file defines the application and database services.
 
-Configured a PostgreSQL health check using `pg_isready`.
-
-The application uses:
+The application image is built from the local Dockerfile:
 
 ```yaml
-depends_on:
-  db:
-    condition: service_healthy
+app:
+  build: .
+  image: notes-app:3
 ```
 
-This delays application startup until PostgreSQL reports healthy.
+The database uses the PostgreSQL 16 image:
 
-### 4. Preserved persistent storage
+```yaml
+db:
+  image: postgres:16
+```
 
-Configured `pgdata` as an external volume:
+Both services use `restart: unless-stopped`, allowing Docker to restart them under the configured restart policy unless they have been explicitly stopped.
+
+### 3. Configured Health Checks
+
+#### PostgreSQL Health Check
+
+The database service uses `pg_isready` to check whether PostgreSQL is accepting connections.
+
+Its configured parameters are:
+
+- Interval: 10 seconds
+- Timeout: 5 seconds
+- Retries: 5
+- Start period: 10 seconds
+
+#### Application Health Check
+
+The application image defines a health check in the Dockerfile. It sends a request to the local `/health` endpoint.
+
+Its configured parameters are:
+
+- Interval: 30 seconds
+- Timeout: 3 seconds
+- Retries: 3
+- Start period: 5 seconds
+
+These checks allow Docker to report whether each service is healthy according to its configured test.
+
+The application also uses `depends_on` with `condition: service_healthy` for the database. This coordinates initial startup so the application waits for the database to become healthy.
+
+Health checks do not guarantee that an application will recover automatically from every runtime failure.
+
+### 4. Preserved Persistent Storage and Networking
+
+The Compose project reuses two existing external Docker resources.
+
+#### Persistent Volume
 
 ```yaml
 volumes:
@@ -58,51 +113,93 @@ volumes:
     name: pgdata
 ```
 
-This reuses the existing volume instead of creating a replacement.
+The `pgdata` volume stores PostgreSQL's database files.
 
-The existing `notes-net` network is also reused as an external network.
+Declaring it as external allows Compose to reuse the existing volume rather than managing it as a new project-owned volume.
 
-### 5. Validated the deployment
+This was important during migration because the database already contained records that needed to be preserved.
 
-Validated the Compose configuration with:
+#### External Network
+
+```yaml
+networks:
+  notes-net:
+    external: true
+    name: notes-net
+```
+
+The application and database reuse the existing `notes-net` network.
+
+Docker's service discovery allows the application to reach PostgreSQL using the hostname `db` within the Compose network.
+
+### 5. Applied Container Security Controls
+
+The application service uses several runtime security controls.
+
+| Control | Configuration | Purpose |
+|---|---|---|
+| Non-root user | `USER app` in the Dockerfile | Runs the application without using the root user. |
+| Read-only root filesystem | `read_only: true` | Prevents normal writes to the container's root filesystem. |
+| Temporary filesystem | `/tmp` mounted as `tmpfs` | Provides temporary writable storage. |
+| Linux capabilities | `cap_drop: ALL` | Removes Linux capabilities from the application container. |
+| Privilege escalation | `no-new-privileges:true` | Prevents processes from gaining additional privileges through supported privilege-escalation mechanisms. |
+| Local port binding | `127.0.0.1:5000:5000` | Limits direct host-port exposure to the loopback interface. |
+
+The Dockerfile creates a dedicated system user named `app` with UID `10001`.
+
+The application runs using Gunicorn with two workers and listens on port `5000` inside the container.
+
+These controls reduce the application's attack surface but do not replace host security, application security, vulnerability management, or appropriate network controls.
+
+### 6. Validated the Compose Configuration
+
+The Compose configuration was validated using:
 
 ```bash
 docker compose config --quiet
 ```
 
-Built the application image:
+This checks whether Docker Compose can parse and resolve the configuration. It does not prove that the services will start successfully.
+
+The application image was then built:
 
 ```bash
 docker compose build app
 ```
 
-Tested database connectivity from the new application image against the existing database before migration.
+Before migration, database connectivity was tested from the new application image against the existing database.
 
-The query returned both existing records.
+The query returned both existing records, providing evidence that the new application image could access the existing data before the deployment was switched over.
 
-### 6. Migrated to Compose
+### 7. Migrated the Application to Compose
 
-Stopped the previous containers and started the Compose deployment:
+The existing manually managed containers were stopped, and the Compose deployment was started using:
 
 ```bash
 docker compose up -d
 ```
 
-After verifying the new deployment, removed the obsolete containers without removing their images or the database volume.
+After verifying the new deployment, obsolete containers were removed without removing their images or the existing database volume.
 
 The previous `notes-app:2` image and the existing database backup were retained.
 
+**Important:** Removing a container and removing a Docker volume are different operations. Removing the database container does not necessarily remove its persistent volume, and deleting a volume can permanently remove the data stored in it.
+
 ## Verification
 
-### Application health
+The following checks were documented during deployment verification.
+
+### 1. Application Health Endpoint
 
 ```bash
 curl -i http://127.0.0.1:5000/health
 ```
 
-Result: HTTP `200 OK`.
+**Recorded result:** HTTP `200 OK`.
 
-### Application API
+This confirms that the health endpoint returned a successful HTTP response during the documented test.
+
+### 2. Application API
 
 ```bash
 curl -s http://127.0.0.1:5000/notes
@@ -110,59 +207,83 @@ curl -s http://127.0.0.1:5000/notes
 
 The API returned the two original notes:
 
-- ID 1: `survives container delete`
-- ID 34: `Docker network DNS works`
+| ID | Text |
+|---:|---|
+| 1 | `survives container delete` |
+| 34 | `Docker network DNS works` |
 
-### Database verification
+These records were present after migration.
+
+### 3. Direct Database Verification
+
+The database was queried through the Compose service:
 
 ```bash
-docker compose exec db psql -U postgres -d postgres -c 'SELECT id, txt FROM notes ORDER BY id;'
+docker compose exec db \
+  psql -U postgres -d postgres \
+  -c 'SELECT id, txt FROM notes ORDER BY id;'
 ```
 
 Both original records remained present after migration.
 
-### Restart verification
+This provided an additional check beyond the application API by querying PostgreSQL directly.
 
-Restarted the application:
+### 4. Application Restart Verification
+
+The application service was restarted:
 
 ```bash
 docker compose restart app
 ```
 
-The application recovered, and both API endpoints continued to work.
+After the restart, the application recovered and both API endpoints continued to work.
 
-Final verification with `docker compose ps` showed both services healthy.
+A final `docker compose ps` check showed both services healthy during the documented verification.
 
 ## Key Learnings
 
-- Docker Compose makes multi-container deployments repeatable.
-- Service names provide DNS-based communication between containers.
-- Health checks and `depends_on` help coordinate startup.
-- External volumes allow Compose to reuse existing persistent data.
-- Environment files keep credentials separate from application configuration.
+- Docker Compose makes multi-container deployments easier to manage and reproduce.
+- Compose service names provide DNS-based communication between containers on a shared network.
+- Health checks provide service-health information and can coordinate initial startup.
+- External volumes allow a Compose project to reuse existing persistent database storage.
+- Environment files separate credentials from the application's committed source code.
+- Read-only filesystems, non-root execution, dropped capabilities, and restricted privilege escalation help reduce container risk.
 - Container removal and volume removal are different operations.
-- Testing database connectivity and verifying application data are essential during migration.
+- Testing database connectivity before migration helps detect configuration problems early.
+- Application-level checks and direct database queries provide complementary verification.
+- A successful deployment should be tested after service restarts.
 
 ## Outcome
 
-Successfully migrated the existing Flask and PostgreSQL deployment to Docker Compose while preserving the database records and reusing the existing volume and network.
+The existing Flask and PostgreSQL application was migrated to Docker Compose while preserving the documented database records and reusing the existing external volume and network.
 
-The deployment was tested through application health checks, API queries, direct database queries, and an application restart.
+The deployment was verified using the application health endpoint, API queries, direct PostgreSQL queries, and an application restart.
+
+The Compose deployment also includes application and database health checks, a non-root application user, and multiple container runtime security controls.
 
 ## Related Security Work
 
-The application was subsequently hardened with Docker runtime
-security controls and scanned for known image vulnerabilities.
+The application was subsequently hardened with Docker runtime security controls and scanned for known image vulnerabilities.
 
 See [Lab 06: Trivy Vulnerability Scanning and Container Hardening](../06-trivy-container-security/README.md).
 
 ## PostgreSQL Backup Automation
 
-The backup script creates timestamped PostgreSQL custom-format dumps, validates
-the archives, and retains the seven newest backups. The current homelab setup
-uses a systemd oneshot service to trigger the backup on startup.
+The homelab includes a PostgreSQL backup script that creates timestamped custom-format dumps, validates the archives, and retains the seven newest matching backup files.
 
-See [PostgreSQL Backup Automation](../../docs/postgres-backup-automation.md)
-for the workflow, configuration, validation results, and known limitations.
+A systemd oneshot service triggers the backup workflow during startup. The previous daily timer is disabled, so the service alone does not guarantee recurring daily backups while the server remains online.
 
-**Validation:** Automatic service startup after a real server reboot has been verified. The script correctly skipped creating another backup because a successful backup was already recorded for that day.
+The backup script also prevents duplicate successful backups on the same local calendar day.
+
+See [PostgreSQL Backup Automation](../../docs/postgres-backup-automation.md) for the workflow, configuration, validation results, and limitations.
+
+### Backup and Recovery Evidence
+
+Two recovery tests are documented in [Lab 04: PostgreSQL Backup and Restore](../04-postgresql-backup-restore/README.md).
+
+- The 24 October test verified selected record IDs, text hashes, and sequence state.
+- The 28 October test restored the backup into an isolated PostgreSQL instance and verified matching row counts between the original and restored tables.
+
+The second test did not independently verify exact record equality or restored sequence state.
+
+**Validation:** Automatic systemd service startup after a real server reboot was verified. The backup script also correctly skipped a duplicate backup when a successful backup was already recorded for that day.
