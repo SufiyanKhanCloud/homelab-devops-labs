@@ -50,3 +50,28 @@ def test_add_note():
         "INSERT INTO notes(txt) VALUES (%s)",
         ("Test note",),
     )
+
+
+def test_list_notes_database_error():
+    client = app.app.test_client()
+
+    with patch("app.get_conn", side_effect=app.psycopg.OperationalError("Database unavailable")):
+        response = client.get("/notes")
+
+    assert response.status_code == 503
+    assert response.get_json() == {"error": "Service temporarily unavailable"}
+
+
+def test_add_note_database_error():
+    client = app.app.test_client()
+
+    with patch(
+        "app.get_conn",
+        side_effect=app.psycopg.OperationalError("Database unavailable"),
+    ):
+        response = client.post("/notes", json={"txt": "Test note"})
+
+    assert response.status_code == 503
+    assert response.get_json() == {
+        "error": "Service temporarily unavailable"
+    }
