@@ -46,12 +46,23 @@ This roadmap tracks implementation and verification, not just planned ideas.
 
 ## Phase 5: CI/CD
 
-- [ ] Implement automated build and test stages.
-- [ ] Configure a controlled deployment workflow.
-- [ ] Document failure handling and recovery.
+- [x] Add a GitHub Actions workflow for automated testing and coverage reporting.
+- [x] Build the application Docker image in CI.
+- [x] Configure Docker Hub publishing for pushes to `main`.
+- [x] Tag published images with the full Git commit SHA.
+- [x] Configure Tailscale authentication for GitHub Actions.
+- [x] Configure SSH deployment with strict host-key verification.
+- [x] Restrict the deployment SSH key to a server-side deployment script.
+- [x] Pull and deploy the requested image on the homelab.
+- [x] Verify the initial automated deployment and API health.
+- [x] Confirm existing notes remain accessible after deployment.
+- [ ] Test another fresh commit pushed to `main`.
+- [ ] Verify that the new commit automatically triggers a successful deployment.
+- [ ] Document failure handling and recovery procedures.
 
 ## Ongoing Work
 
 - Investigate Wi-Fi latency using measured evidence.
 - Document troubleshooting decisions and verified outcomes.
 - Review security before every public push.
+- Keep documentation aligned with the actual implementation.
