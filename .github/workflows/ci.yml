@@ -1,8 +1,11 @@
-name: CI
+name: CI/CD
 
 on:
   push:
   pull_request:
+
+permissions:
+  contents: read
 
 jobs:
   test-and-build:
@@ -25,6 +28,29 @@ jobs:
         working-directory: labs/05-docker-compose
         run: python -m pytest --cov=app --cov-report=term-missing -v test_app.py
 
-      - name: Build Docker image
-        working-directory: labs/05-docker-compose
-        run: docker build -t notes-app:ci .
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Generate Docker image tags
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: sufiyankhan10/homelab-notes-api
+          tags: |
+            type=sha,format=long,prefix=sha-
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build and publish Docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./labs/05-docker-compose
+          push: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
