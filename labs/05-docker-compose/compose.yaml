@@ -16,8 +16,7 @@ services:
       start_period: 10s
 
   app:
-    build: .
-    image: notes-app:3
+    image: ${NOTES_IMAGE:?NOTES_IMAGE is required}
     restart: unless-stopped
     read_only: true
     tmpfs:

@@ -6,6 +6,7 @@ on:
 
 permissions:
   contents: read
+  id-token: write
 
 jobs:
   test-and-build:
@@ -54,3 +55,36 @@ jobs:
           push: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+
+      - name: Connect to Tailscale
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: tailscale/github-action@v4
+        with:
+          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          audience: ${{ secrets.TS_AUDIENCE }}
+          tags: tag:ci
+
+      - name: Configure SSH
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          HOMELAB_SSH_KEY: ${{ secrets.HOMELAB_SSH_KEY }}
+          HOMELAB_KNOWN_HOSTS: ${{ secrets.HOMELAB_KNOWN_HOSTS }}
+        run: |
+          install -m 700 -d "$HOME/.ssh"
+          printf '%s\n' "$HOMELAB_SSH_KEY" > "$HOME/.ssh/homelab_deploy"
+          chmod 600 "$HOME/.ssh/homelab_deploy"
+          printf '%s\n' "$HOMELAB_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/known_hosts"
+
+      - name: Deploy to homelab
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          GITHUB_SHA: ${{ github.sha }}
+        run: |
+          ssh \
+            -i "$HOME/.ssh/homelab_deploy" \
+            -o IdentitiesOnly=yes \
+            -o BatchMode=yes \
+            -o StrictHostKeyChecking=yes \
+            sufiyan@100.88.34.81 \
+            "sha-${GITHUB_SHA}"
