@@ -2,20 +2,18 @@
 
 ## Objective
 
-Configure private connectivity between a Linux client and an Ubuntu
-Server, then verify remote administration through SSH.
+Configure private connectivity between a Linux client and an Ubuntu Server, then verify remote administration through SSH.
 
 ## Architecture
 
 Linux Client → Tailscale Network → Ubuntu Server → SSH
 
-The connection is private to the authorized tailnet. No public server
-IP address or private network identifier is published here.
+The connection is private to the authorized tailnet. No public server IP address or private network identifier is published here.
 
 ## Environment
 
-- Server: Ubuntu Server 24.04 LTS
-- Client: Ubuntu Linux
+- Server: Ubuntu Server 24.04.5 LTS
+- Client: Ubuntu Linux 26.04 LTS
 - Private connectivity: Tailscale
 - Remote administration: OpenSSH
 - Hostname resolution: Tailscale MagicDNS
@@ -30,7 +28,7 @@ Run on each device:
 tailscale status
 ```
 
-Confirm that the expected devices appear in the tailnet.
+Confirmed that both devices appeared in the tailnet.
 
 ### 2. Test connectivity
 
@@ -40,8 +38,7 @@ From the client:
 tailscale ping homelab-server
 ```
 
-The connection was observed to use a direct LAN path while both
-devices were on the same home network.
+A direct LAN path was observed while both devices were connected to the same home network.
 
 ### 3. Test SSH using the Tailscale IP
 
@@ -49,10 +46,7 @@ devices were on the same home network.
 ssh <username>@<tailscale-ip>
 ```
 
-Replace the placeholders with the intended account and device's
-Tailscale IP.
-
-SSH connectivity was successfully tested over a mobile-data hotspot.
+SSH connectivity was successfully tested over a mobile-data hotspot using Tailscale.
 
 ### 4. Test MagicDNS
 
@@ -60,7 +54,19 @@ SSH connectivity was successfully tested over a mobile-data hotspot.
 ssh <username>@homelab-server
 ```
 
-Hostname-based SSH connectivity was also tested successfully.
+Hostname-based SSH connectivity was successfully verified.
+
+### 5. Verify boot persistence
+
+Tailscale was configured to start automatically with the server.
+
+After a controlled server reboot, remote SSH connectivity was successfully verified without manually starting Tailscale.
+
+### 6. Review SSH and firewall access controls
+
+- SSH key-based authentication was configured.
+- UFW was configured with default-deny incoming traffic and an OpenSSH allow rule.
+- The CI/CD deployment SSH key was restricted to the server-side deployment command rather than general shell access.
 
 ## Observations
 
@@ -69,24 +75,16 @@ Hostname-based SSH connectivity was also tested successfully.
 - Remote SSH access worked over the hotspot.
 - Relay latency was noticeably higher during the observed tests.
 
-These observations describe the tested network conditions and do not
-establish the root cause of the separate Wi-Fi latency issue.
-
-## Pending Verification
-
-- [ ] Verify Tailscale service startup after a server reboot.
-- [ ] Test remote connectivity after a controlled reboot.
-- [ ] Review SSH authentication and access controls.
-- [ ] Document additional results if network behavior changes.
+These observations describe the tested network conditions and do not establish the root cause of the separate Wi-Fi latency issue.
 
 ## Security
 
 - Never publish Tailscale authentication keys.
 - Do not publish SSH private keys or credentials.
 - Use authorized devices and accounts only.
+- Keep SSH access restricted to authorized users.
 - Review access controls before exposing additional services.
 
 ## Status
 
-Connectivity and remote SSH access tested. Boot persistence and
-post-reboot behavior remain to be verified.
+Tailscale connectivity, MagicDNS, key-based SSH access, firewall rules, automatic service startup, and post-reboot remote connectivity have been implemented and tested.
