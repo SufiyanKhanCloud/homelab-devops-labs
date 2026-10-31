@@ -44,9 +44,11 @@ flowchart TD
     App --> DB
     DB --> Volume
 
-    Prom --> Node
-    Grafana --> Prom
+    Prom -->|"Scrapes host metrics"| Node
+    Grafana -->|"Queries metrics"| Prom
 ```
+
+Prometheus collects host metrics from Node Exporter. Grafana queries Prometheus to display dashboards and visualize monitoring data.
 
 ### CI/CD Deployment Flow
 
@@ -77,9 +79,9 @@ flowchart TD
     Decision -->|No| End
 ```
 
-The CI/CD workflow runs automated tests and builds the application image for applicable repository events. Markdown-only changes are excluded through GitHub Actions path filtering.
+The workflow runs automated tests and builds the application image for applicable repository events. Markdown-only changes are excluded through GitHub Actions path filtering.
 
-Image publishing and deployment are restricted to pushes to `main`. Pull requests run the applicable CI checks but do not publish or deploy the application.
+Image publishing and deployment are restricted to pushes to `main`. Pull requests run applicable CI checks but do not publish or deploy the application.
 
 The deployment process uses Tailscale for private connectivity and a dedicated SSH key restricted to a server-side deployment script. The script validates the requested image tag, pulls the corresponding image, updates the application service, and checks API health.
 
@@ -99,9 +101,9 @@ Private network details, credentials, and sensitive access configuration are int
 | Database | PostgreSQL 16 |
 | Container registry | Docker Hub |
 | Container networking | Docker bridge network |
-| Data persistence | Docker named volume |
+| Data persistence | Docker named volumes |
 | Monitoring | Prometheus and Node Exporter |
-| Dashboards and alert rules | Grafana and Prometheus |
+| Dashboards and visualization | Grafana |
 | Container security | Trivy |
 | Documentation | Markdown and Mermaid |
 
@@ -110,13 +112,13 @@ Private network details, credentials, and sensitive access configuration are int
 | Lab | Status |
 |---|---|
 | Linux Server Administration | In progress |
-| Tailscale Remote Access | Tailscale connectivity, SSH, MagicDNS, startup, and reboot verification completed |
+| Tailscale Remote Access | Connectivity, SSH, MagicDNS, startup, and reboot verification completed |
 | Docker Networking | Implemented and documented |
-| PostgreSQL Backup and Restore | Custom-format backup inspection, isolated database restoration, data comparison, and sequence verification completed |
-| Docker Compose | Application migration, health checks, runtime security controls, and data-persistence verification completed |
-| Trivy Container Security | Image scanning and runtime hardening completed; vulnerability remediation and rescan pending |
+| PostgreSQL Backup and Restore | Custom-format backups, isolated restoration, data comparison, and sequence verification completed |
+| Docker Compose | Application migration, health checks, runtime security controls, and persistence verification completed |
+| Trivy Container Security | Historical image scanning and runtime hardening completed; vulnerability remediation and rescan pending |
 | Monitoring | Prometheus, Node Exporter, and Grafana deployed; dashboard and CPU alert-rule testing completed |
-| CI/CD | Two successful automated deployments verified; application-code deployment testing and failure-recovery work pending |
+| CI/CD | Two successful automated deployments verified; fresh application-code deployment testing and failure recovery pending |
 
 See [ROADMAP.md](ROADMAP.md) for detailed implementation and verification status.
 
@@ -124,9 +126,9 @@ See [ROADMAP.md](ROADMAP.md) for detailed implementation and verification status
 
 The workflow is defined in `.github/workflows/ci.yml`.
 
-### 1. Continuous Integration
+### Continuous Integration
 
-GitHub Actions performs the following steps for applicable pushes and pull requests:
+For applicable pushes and pull requests, GitHub Actions:
 
 - Checks out the repository.
 - Sets up Python 3.12.
@@ -134,25 +136,23 @@ GitHub Actions performs the following steps for applicable pushes and pull reque
 - Runs pytest with coverage reporting.
 - Builds the application Docker image.
 
-Markdown-only changes are excluded using `paths-ignore` for both push and pull-request events.
+Markdown-only changes are excluded using `paths-ignore` for push and pull-request events. Changes containing both Markdown and application files still trigger the workflow.
 
-If a change includes both Markdown and application files, the workflow still runs.
+The application tests cover health responses, notes retrieval, note insertion, database error handling, and environment-based database configuration. Database connections are mocked in these tests; they do not replace integration testing against a running PostgreSQL instance.
 
-### 2. Image Publishing
+### Image Publishing
 
-On pushes to `main`, the workflow authenticates to Docker Hub and publishes the application image.
-
-The image repository is:
+On pushes to `main`, the workflow authenticates to Docker Hub and publishes the application image:
 
 `docker.io/sufiyankhan10/homelab-notes-api`
 
-Published images receive a full Git commit SHA tag, allowing deployments to reference a specific build. The default branch also receives the `latest` tag.
+Published images receive a full Git commit SHA tag. The default branch also receives the `latest` tag.
 
 SHA-based tags provide an identifiable reference to the image built from a particular commit.
 
-### 3. Secure Deployment
+### Secure Deployment
 
-For successful pushes to `main`, the workflow:
+After successful CI and image publishing for a push to `main`, the workflow:
 
 1. Authenticates to Tailscale using GitHub Actions identity federation.
 2. Establishes private connectivity to the homelab server.
@@ -161,33 +161,30 @@ For successful pushes to `main`, the workflow:
 5. Pulls the image and updates the application service through Docker Compose.
 6. Waits for the API health check to succeed.
 
-The server-side script validates the requested tag before performing the deployment.
+The server-side script accepts only full SHA-tagged image references and updates the application service without intentionally recreating PostgreSQL.
 
-The deployment SSH key is restricted to the server-side deployment command rather than providing a general-purpose interactive shell.
+The deployment SSH key is restricted to the deployment command rather than providing a general-purpose interactive shell.
 
-The application update targets the application service without intentionally recreating the PostgreSQL service. Database data is stored separately from the application container using a persistent Docker volume.
-
-### 4. Deployment Verification
+### Deployment Verification
 
 Two automated deployments through GitHub Actions have completed successfully.
 
-The initial deployment verified the end-to-end deployment process, including image publishing, private connectivity, restricted SSH access, application update, and API health.
+The initial deployment verified the end-to-end process, including image publishing, private connectivity, restricted SSH access, application update, and API health.
 
-A subsequent deployment was also completed successfully using the image tagged with commit:
+A subsequent deployment used the image tagged with commit:
 
 `73d5182683bc265d0fb8704804fb3e574cb961ee`
 
-The subsequent deployment followed a CI/CD workflow configuration change.
+This deployment was triggered by a CI/CD workflow configuration change rather than an application-code change.
 
-Post-deployment verification on the homelab confirmed:
+Post-deployment verification confirmed:
 
 - The application container was running and reported healthy.
 - The running application used the expected commit-SHA image.
 - The API health endpoint returned HTTP `200 OK`.
 - The health response was `{"status":"ok"}`.
 - The notes endpoint returned both existing records.
-- PostgreSQL remained healthy.
-- The PostgreSQL container was not recreated during the application update.
+- PostgreSQL remained healthy and was not recreated during the application update.
 - Prometheus, Node Exporter, and Grafana remained running.
 
 The existing application records remained accessible:
@@ -205,62 +202,78 @@ The existing application records remained accessible:
 ]
 ```
 
-These checks establish that both automated deployments completed successfully and that existing application data remained accessible.
+**Known limitations:**
 
-**Known limitation:** The subsequent deployment used a workflow-configuration commit rather than an application-code change. A separate deployment triggered by a fresh application-code commit is still pending.
-
-Automatic rollback and deployment failure recovery have also not yet been implemented and verified.
+- A deployment triggered by a fresh application-code change is still pending.
+- Automatic rollback and deployment failure recovery have not been implemented or tested.
 
 ## PostgreSQL Backup and Restore
 
-PostgreSQL backup and recovery are treated as separate operational tasks rather than assuming that a successful backup command guarantees recoverability.
+PostgreSQL backup and recovery are treated as separate operational tasks. A successful backup command alone does not establish that data can be recovered.
 
-The project includes:
+Implemented work includes:
 
-- Custom-format PostgreSQL backups using `pg_dump`.
+- Custom-format backups using `pg_dump`.
 - Backup archive inspection using `pg_restore`.
-- Restoration into an isolated temporary database.
+- Restoration into isolated temporary databases.
 - Comparison of restored records and checksums.
 - Sequence-state verification.
 - Backup validation and retention controls.
+- Startup-triggered backup automation using a systemd oneshot service.
 
-An isolated restoration test confirmed that the restored records matched the source data and that the sequence state was preserved.
+Isolated restoration tests verified restored data and sequence state. The automated backup service also completed successfully on October 31, 2026, creating and validating:
 
-The startup-triggered backup service has also been tested after a server reboot.
+`notes-db-2026-10-31-151557.dump`
 
-**Known limitation:** The startup-triggered backup service is not a guaranteed daily scheduler. Failure notifications and automated retry handling remain future improvements.
+**Known limitation:** The backup service runs after server startup with a five-minute delay. It is not a guaranteed daily scheduler if the server remains running for multiple days. Failure notifications and automated retry handling remain future improvements.
 
-See the relevant lab documentation for implementation details and verification results.
+See [Lab 04: PostgreSQL Backup and Restore](labs/04-postgresql-backup-restore/README.md) for implementation details and test evidence.
 
 ## Monitoring
 
-The homelab monitoring stack consists of:
+The monitoring stack consists of:
 
-- Prometheus for metrics collection and alert-rule evaluation.
-- Node Exporter for host-level metrics.
-- Grafana for dashboards and visualization.
+- **Prometheus:** Metrics collection and alert-rule evaluation.
+- **Node Exporter:** Host-level metrics.
+- **Grafana:** Dashboards and visualization.
 
-The monitoring services are bound to localhost rather than exposed directly to the public network.
+Prometheus scrapes itself and Node Exporter every 15 seconds. Grafana queries Prometheus for dashboard data.
+
+Prometheus and Grafana use persistent Docker volumes. Their web interfaces are bound to localhost and accessed remotely through SSH tunnels. Node Exporter is accessible to Prometheus over the Docker network rather than through a published host port.
 
 Verification includes:
 
 - Prometheus scrape-target checks.
 - Node Exporter metrics collection.
-- Grafana dashboard configuration.
-- Host CPU alert-rule validation.
+- Grafana data-source and dashboard configuration.
+- CPU alert-rule validation.
 - Pending-to-firing alert-state testing through a controlled threshold simulation.
 
-**Known limitations:** Alert notification delivery has not yet been configured. The current setup is a single-host learning environment rather than a highly available monitoring platform.
+The configured CPU alert triggers when usage remains above 80% for five minutes.
+
+**Known limitations:** Alert notification delivery has not been configured. The current setup is a single-host learning environment, not a highly available monitoring platform.
+
+See [Lab 07: Monitoring](labs/07-monitoring/README.md) for configuration and verification details.
 
 ## Container Security
 
-Trivy is used to scan container images for reported vulnerabilities.
+Trivy is used to scan application images for reported vulnerabilities. The project also covers container runtime hardening and Docker configuration review.
 
-The project also covers container runtime hardening and Docker configuration review.
+A historical scan of the `notes-app:3` image on October 17, 2026, reported:
 
-Completed work includes image scanning, investigation of reported findings, and runtime security improvements.
+- 44 HIGH findings.
+- 0 CRITICAL findings.
+- 8 unique CVEs.
+- All 44 HIGH findings were associated with operating-system packages.
+- No HIGH or CRITICAL Python dependency findings.
 
-**Remaining work:** Remediate applicable image vulnerabilities, rebuild the image, and perform a post-remediation scan to verify the results.
+These results describe that specific historical image scan, not necessarily the current image.
+
+Runtime hardening includes a non-root application user, read-only root filesystem, restricted Linux capabilities, no-new-privileges, and a constrained temporary filesystem.
+
+**Remaining work:** Investigate applicable vendor fixes, rebuild the image after appropriate package updates, and perform a post-remediation scan.
+
+See [Lab 06: Trivy Container Security](labs/06-trivy-container-security/README.md) for the historical findings and hardening details.
 
 ## Engineering Approach
 
@@ -290,12 +303,10 @@ The project follows an evidence-based approach:
 
 - Investigate Wi-Fi latency using measured evidence.
 - Investigate and remediate reported container image vulnerabilities.
-- Rebuild the application image after appropriate package updates and perform a post-remediation Trivy scan.
+- Rebuild the application image and perform a post-remediation Trivy scan.
 - Configure and test monitoring alert notifications.
 - Test automated deployment following a fresh application-code change.
 - Implement and test deployment failure handling and rollback.
-- Review SSH authentication and access controls.
-- Continue documenting troubleshooting decisions and verified outcomes.
 
 ## Security
 
