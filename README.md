@@ -48,7 +48,7 @@ flowchart TD
     Grafana -->|"Queries metrics"| Prom
 ```
 
-Prometheus collects host metrics from Node Exporter. Grafana queries Prometheus to display dashboards and visualize monitoring data.
+Node Exporter exposes host-level metrics through its `/metrics` endpoint. Prometheus periodically scrapes this endpoint and stores the collected metrics. Grafana then queries Prometheus using PromQL to retrieve and visualize the data in dashboards.
 
 ### CI/CD Deployment Flow
 
@@ -118,7 +118,7 @@ Private network details, credentials, and sensitive access configuration are int
 | Docker Compose | Application migration, health checks, runtime security controls, and persistence verification completed |
 | Trivy Container Security | Historical image scanning and runtime hardening completed; vulnerability remediation and rescan pending |
 | Monitoring | Prometheus, Node Exporter, and Grafana deployed; dashboard and CPU alert-rule testing completed |
-| CI/CD | Two successful automated deployments verified; fresh application-code deployment testing and failure recovery pending |
+| CI/CD | Two successful automated deployments verified; deployment from a fresh application-code change and rollback testing pending |
 
 See [ROADMAP.md](ROADMAP.md) for detailed implementation and verification status.
 
@@ -187,6 +187,8 @@ Post-deployment verification confirmed:
 - PostgreSQL remained healthy and was not recreated during the application update.
 - Prometheus, Node Exporter, and Grafana remained running.
 
+The `/health` endpoint verifies that the Flask application responds successfully. It does not independently verify PostgreSQL availability; database health is checked separately through the PostgreSQL container's health check.
+
 The existing application records remained accessible:
 
 ```json
@@ -221,7 +223,7 @@ Implemented work includes:
 - Backup validation and retention controls.
 - Startup-triggered backup automation using a systemd oneshot service.
 
-Isolated restoration tests verified restored data and sequence state. The automated backup service also completed successfully on October 31, 2026, creating and validating:
+Separate isolated restore tests verified restored data and sequence state using an earlier backup. The automated backup service also completed successfully on October 31, 2026, creating and validating a new backup archive:
 
 `notes-db-2026-10-31-151557.dump`
 
@@ -292,7 +294,7 @@ The project follows an evidence-based approach:
 - Only verified results are described as completed.
 - Planned work and known limitations remain clearly identified.
 - Backup and restore procedures are tested rather than assumed to work.
-- Security findings are investigated before remediation is attempted.
+- Historical security findings are documented and reviewed; vulnerability remediation remains pending.
 - Application health and data persistence are checked after changes.
 - Deployment credentials are stored as GitHub Actions secrets.
 - SSH host-key verification remains enabled.
