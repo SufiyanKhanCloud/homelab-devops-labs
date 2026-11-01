@@ -91,5 +91,5 @@ jobs:
             -o IdentitiesOnly=yes \
             -o BatchMode=yes \
             -o StrictHostKeyChecking=yes \
-            sufiyan@100.88.34.81 \
+            homelab-deploy@100.88.34.81 \
             "sha-${GITHUB_SHA}"
