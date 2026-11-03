@@ -10,3 +10,10 @@ trivy-final.json
 
 # Local configuration backups
 compose.yaml.before-hardening
+
+
+# Local Trivy scan artifacts
+scan-results*.json
+trivy-*.json
+trivy-findings.txt
+trivy_*.deb

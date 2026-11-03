@@ -5,3 +5,9 @@ __pycache__/
 *.md
 Dockerfile
 .dockerignore
+
+# Local security scan artifacts
+scan-results*.json
+trivy-*.json
+trivy-findings.txt
+trivy_*.deb
