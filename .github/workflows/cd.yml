@@ -1,0 +1,101 @@
+name: CD
+
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: homelab-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_branch == 'main' &&
+      github.event.workflow_run.head_repository.full_name == github.repository
+
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    environment:
+      name: homelab-production
+
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Check for stale deployment
+        id: stale-check
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          CI_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          latest_app_sha=$(gh api \
+            "repos/${REPO}/commits" \
+            -f sha=main \
+            -f path=labs/05-docker-compose \
+            -F per_page=1 \
+            --jq '.[0].sha // empty')
+
+          if [[ -z "$latest_app_sha" ]]; then
+            echo "Could not determine latest application commit."
+            exit 1
+          fi
+
+          comparison=$(gh api \
+            "repos/${REPO}/compare/${latest_app_sha}...${CI_SHA}" \
+            --jq '.status')
+
+          echo "CI commit: $CI_SHA"
+          echo "Latest application commit: $latest_app_sha"
+          echo "Comparison: $comparison"
+
+          if [[ "$comparison" == "ahead" || "$comparison" == "identical" ]]; then
+            echo "CI commit contains the latest application changes."
+            echo "deploy=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "Skipping stale deployment."
+            echo "deploy=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Connect to Tailscale
+        if: steps.stale-check.outputs.deploy == 'true'
+        uses: tailscale/github-action@v4
+        with:
+          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          audience: ${{ secrets.TS_AUDIENCE }}
+          tags: tag:ci
+          ping: 100.88.34.81
+
+      - name: Configure SSH
+        if: steps.stale-check.outputs.deploy == 'true'
+        env:
+          HOMELAB_SSH_KEY: ${{ secrets.HOMELAB_SSH_KEY }}
+          HOMELAB_KNOWN_HOSTS: ${{ secrets.HOMELAB_KNOWN_HOSTS }}
+        run: |
+          install -m 700 -d "$HOME/.ssh"
+          printf '%s\n' "$HOMELAB_SSH_KEY" > "$HOME/.ssh/homelab_deploy"
+          chmod 600 "$HOME/.ssh/homelab_deploy"
+          printf '%s\n' "$HOMELAB_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/known_hosts"
+
+      - name: Deploy exact CI image
+        if: steps.stale-check.outputs.deploy == 'true'
+        env:
+          CI_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          ssh \
+            -i "$HOME/.ssh/homelab_deploy" \
+            -o IdentitiesOnly=yes \
+            -o BatchMode=yes \
+            -o StrictHostKeyChecking=yes \
+            homelab-deploy@100.88.34.81 \
+            "sha-${CI_SHA}"
