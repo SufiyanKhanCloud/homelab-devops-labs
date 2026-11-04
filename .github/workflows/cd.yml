@@ -38,7 +38,7 @@ jobs:
           REPO: ${{ github.repository }}
           CI_SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
-          latest_app_sha=$(gh api \
+          latest_app_sha=$(gh api --method GET \
             "repos/${REPO}/commits" \
             -f sha=main \
             -f path=labs/05-docker-compose \
@@ -50,7 +50,7 @@ jobs:
             exit 1
           fi
 
-          comparison=$(gh api \
+          comparison=$(gh api --method GET \
             "repos/${REPO}/compare/${latest_app_sha}...${CI_SHA}" \
             --jq '.status')
 
