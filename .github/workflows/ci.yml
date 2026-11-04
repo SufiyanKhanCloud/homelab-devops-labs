@@ -59,6 +59,38 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
 
+      - name: Install Trivy
+        env:
+          TRIVY_VERSION: "0.70.0"
+        run: |
+          set -euo pipefail
+
+          ARCHIVE="trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz"
+          BASE_URL="https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}"
+
+          mkdir -p "$HOME/.local/bin"
+          cd "$RUNNER_TEMP"
+
+          curl --fail --show-error --location \
+            --retry 5 --retry-all-errors --retry-delay 2 \
+            "$BASE_URL/$ARCHIVE" -o "$ARCHIVE"
+
+          curl --fail --show-error --location \
+            --retry 5 --retry-all-errors --retry-delay 2 \
+            "$BASE_URL/trivy_${TRIVY_VERSION}_checksums.txt" \
+            -o checksums.txt
+
+          awk -v file="$ARCHIVE" '$2 == file {print}' checksums.txt \
+            | sha256sum --check -
+
+          tar -xzf "$ARCHIVE" trivy
+
+          install -m 0755 trivy "$HOME/.local/bin/trivy"
+
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+          trivy --version
+
       - name: Scan image with Trivy
         uses: aquasecurity/trivy-action@v0.36.0
         with:
@@ -69,6 +101,7 @@ jobs:
           vuln-type: os,library
           scanners: vuln
           severity: CRITICAL,HIGH
+          skip-setup-trivy: true
 
       - name: Log in to Docker Hub
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
