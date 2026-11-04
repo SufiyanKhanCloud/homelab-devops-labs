@@ -4,6 +4,8 @@ on:
   push:
     paths:
       - "labs/05-docker-compose/**"
+      - ".github/workflows/ci.yml"
+      - ".github/workflows/cd.yml"
   pull_request:
     paths:
       - "labs/05-docker-compose/**"
