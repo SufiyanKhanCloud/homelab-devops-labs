@@ -11,6 +11,31 @@ def test_health():
     assert response.status_code == 200
     assert response.get_json() == {"status": "ok"}
 
+def test_readiness_database_available():
+    client = app.app.test_client()
+
+    mock_conn = MagicMock()
+    mock_conn.__enter__.return_value = mock_conn
+
+    with patch("app.get_conn", return_value=mock_conn):
+        response = client.get("/ready")
+
+    assert response.status_code == 200
+    assert response.get_json() == {"status": "ready"}
+    mock_conn.execute.assert_called_once_with("SELECT 1")
+
+
+def test_readiness_database_unavailable():
+    client = app.app.test_client()
+
+    with patch(
+        "app.get_conn",
+        side_effect=app.psycopg.OperationalError("Database unavailable"),
+    ):
+        response = client.get("/ready")
+
+    assert response.status_code == 503
+    assert response.get_json() == {"status": "not_ready"}
 
 def test_list_notes():
     client = app.app.test_client()

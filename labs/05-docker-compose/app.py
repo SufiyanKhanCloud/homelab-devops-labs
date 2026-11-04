@@ -20,6 +20,16 @@ def get_conn():
 def health():
     return jsonify(status="ok")
 
+@app.get("/ready")
+def readiness():
+    try:
+        with get_conn() as conn:
+            conn.execute("SELECT 1")
+
+        return jsonify(status="ready")
+    except psycopg.Error:
+        app.logger.warning("Readiness check failed: database unavailable")
+        return jsonify(status="not_ready"), 503
 
 @app.get("/notes")
 def list_notes():
