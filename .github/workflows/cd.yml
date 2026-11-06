@@ -8,12 +8,14 @@ on:
 permissions:
   contents: read
 
-concurrency:
-  group: homelab-production
-  cancel-in-progress: false
-
 jobs:
-  deploy:
+  # ==================================================
+  # 1. Validate the deployment request from CI
+  # ==================================================
+
+  prepare:
+    name: Validate deployment request
+
     if: >-
       github.event.workflow_run.conclusion == 'success' &&
       github.event.workflow_run.event == 'push' &&
@@ -21,11 +23,157 @@ jobs:
       github.event.workflow_run.head_repository.full_name == github.repository
 
     runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    permissions:
+      actions: read
+      contents: read
+
+    outputs:
+      deploy: ${{ steps.stale-check.outputs.deploy || 'false' }}
+
+    steps:
+      # --------------------------------------------------
+      # 1. Download the manifest from this exact CI run
+      # --------------------------------------------------
+
+      - name: Download deployment manifest
+        uses: actions/download-artifact@v8
+        with:
+          name: deployment-manifest-${{ github.event.workflow_run.head_sha }}
+          path: ${{ runner.temp }}/ci-manifest
+          repository: ${{ github.repository }}
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ github.token }}
+
+      # --------------------------------------------------
+      # 2. Validate manifest structure and identity
+      # --------------------------------------------------
+
+      - name: Validate deployment manifest
+        id: manifest
+        env:
+          CI_SHA: ${{ github.event.workflow_run.head_sha }}
+          REPOSITORY: ${{ github.repository }}
+          EXPECTED_IMAGE: sufiyankhan10/homelab-notes-api:sha-${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+
+          manifest="$RUNNER_TEMP/ci-manifest/deployment-manifest.json"
+
+          if [[ ! "$CI_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "Invalid CI commit SHA."
+            exit 1
+          fi
+
+          if [[ ! -f "$manifest" ]]; then
+            echo "Deployment manifest is missing."
+            exit 1
+          fi
+
+          jq -e \
+            --arg repository "$REPOSITORY" \
+            --arg sha "$CI_SHA" \
+            --arg image "$EXPECTED_IMAGE" \
+            '
+              (keys == [
+                "commit_sha",
+                "deploy_required",
+                "image_ref",
+                "repository",
+                "schema_version"
+              ]) and
+              (.schema_version == 1) and
+              (.repository == $repository) and
+              (.commit_sha == $sha) and
+              (.deploy_required | type == "boolean") and
+              (
+                if .deploy_required then
+                  .image_ref == $image
+                else
+                  .image_ref == null
+                end
+              )
+            ' "$manifest" > /dev/null
+
+          echo "Manifest validation: PASS"
+          jq . "$manifest"
+
+          deploy_required="$(jq -r '.deploy_required' "$manifest")"
+          echo "deploy_required=$deploy_required" >> "$GITHUB_OUTPUT"
+
+      # --------------------------------------------------
+      # 3. Check whether newer image changes exist
+      # --------------------------------------------------
+
+      - name: Checkout main history
+        if: steps.manifest.outputs.deploy_required == 'true'
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Check for newer image changes
+        id: stale-check
+        if: steps.manifest.outputs.deploy_required == 'true'
+        env:
+          CI_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+
+          if ! git show-ref --verify --quiet refs/remotes/origin/main; then
+            echo "Could not find origin/main."
+            exit 1
+          fi
+
+          # The CI commit must still be part of main's history.
+          if ! git merge-base --is-ancestor "$CI_SHA" origin/main; then
+            echo "CI commit is no longer an ancestor of main."
+            echo "Skipping deployment for safety."
+            echo "deploy=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          changed_files="$(git diff --no-renames --name-only "$CI_SHA" origin/main)"
+
+          echo "Files changed after the CI commit:"
+          if [[ -n "$changed_files" ]]; then
+            printf '%s\n' "$changed_files"
+          else
+            echo "None"
+          fi
+
+          # Only these files affect the published application image.
+          if grep -Eq \
+            '^labs/05-docker-compose/(Dockerfile|app\.py|requirements\.txt|\.dockerignore)$' \
+            <<< "$changed_files"; then
+
+            echo "A newer image-relevant change exists."
+            echo "Skipping stale deployment."
+            echo "deploy=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "No newer image-relevant changes found."
+            echo "deploy=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  # ==================================================
+  # 2. Production deployment
+  # ==================================================
+
+  deploy:
+    name: Deploy exact CI image
+
+    needs: prepare
+
+    if: needs.prepare.outputs.deploy == 'true'
+
+    runs-on: ubuntu-latest
     timeout-minutes: 15
 
-    env:
-      HOMELAB_TAILSCALE_IP: ${{ vars.HOMELAB_TAILSCALE_IP }}
-      HOMELAB_DEPLOY_USER: ${{ vars.HOMELAB_DEPLOY_USER }}
+    concurrency:
+      group: homelab-production
+      cancel-in-progress: false
 
     environment:
       name: homelab-production
@@ -34,44 +182,86 @@ jobs:
       contents: read
       id-token: write
 
+    env:
+      HOMELAB_TAILSCALE_IP: ${{ vars.HOMELAB_TAILSCALE_IP }}
+      HOMELAB_DEPLOY_USER: ${{ vars.HOMELAB_DEPLOY_USER }}
+
     steps:
-      - name: Check for stale deployment
-        id: stale-check
+      # --------------------------------------------------
+      # 1. Verify deployment configuration
+      # --------------------------------------------------
+
+      - name: Validate deployment configuration
+        run: |
+          set -euo pipefail
+
+          [[ -n "$HOMELAB_TAILSCALE_IP" ]] || {
+            echo "HOMELAB_TAILSCALE_IP is missing."
+            exit 1
+          }
+
+          [[ -n "$HOMELAB_DEPLOY_USER" ]] || {
+            echo "HOMELAB_DEPLOY_USER is missing."
+            exit 1
+          }
+
+      # --------------------------------------------------
+      # 2. Recheck freshness after environment approval
+      # --------------------------------------------------
+
+      - name: Checkout current main for final freshness check
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Final stale deployment check
+        id: final-stale-check
         env:
-          GH_TOKEN: ${{ github.token }}
-          REPO: ${{ github.repository }}
           CI_SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
-          latest_app_sha=$(gh api --method GET \
-            "repos/${REPO}/commits" \
-            -f sha=main \
-            -f path=labs/05-docker-compose \
-            -F per_page=1 \
-            --jq '.[0].sha // empty')
+          set -euo pipefail
 
-          if [[ -z "$latest_app_sha" ]]; then
-            echo "Could not determine latest application commit."
+          if ! git show-ref --verify --quiet refs/remotes/origin/main; then
+            echo "Could not find origin/main."
             exit 1
           fi
 
-          comparison=$(gh api --method GET \
-            "repos/${REPO}/compare/${latest_app_sha}...${CI_SHA}" \
-            --jq '.status')
-
-          echo "CI commit: $CI_SHA"
-          echo "Latest application commit: $latest_app_sha"
-          echo "Comparison: $comparison"
-
-          if [[ "$comparison" == "ahead" || "$comparison" == "identical" ]]; then
-            echo "CI commit contains the latest application changes."
-            echo "deploy=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "Skipping stale deployment."
+          if ! git merge-base --is-ancestor "$CI_SHA" origin/main; then
+            echo "CI commit is no longer an ancestor of main."
+            echo "Skipping deployment."
             echo "deploy=false" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
 
+          changed_files="$(git diff --no-renames --name-only "$CI_SHA" origin/main)"
+
+          echo "Files changed after the CI commit:"
+          if [[ -n "$changed_files" ]]; then
+            printf '%s\n' "$changed_files"
+          else
+            echo "None"
+          fi
+
+          if grep -Eq \
+            '^labs/05-docker-compose/(Dockerfile|app\.py|requirements\.txt|\.dockerignore)$' \
+            <<< "$changed_files"; then
+
+            echo "Newer image-relevant changes detected."
+            echo "Skipping deployment."
+            echo "deploy=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "No newer image-relevant changes detected."
+            echo "deploy=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      # --------------------------------------------------
+      # 3. Connect to homelab through Tailscale
+      # --------------------------------------------------
+
       - name: Connect to Tailscale
-        if: steps.stale-check.outputs.deploy == 'true'
+        if: steps.final-stale-check.outputs.deploy == 'true'
         uses: tailscale/github-action@v4
         with:
           oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
@@ -79,23 +269,41 @@ jobs:
           tags: tag:ci
           ping: ${{ vars.HOMELAB_TAILSCALE_IP }}
 
+      # --------------------------------------------------
+      # 4. Configure restricted SSH access
+      # --------------------------------------------------
+
       - name: Configure SSH
-        if: steps.stale-check.outputs.deploy == 'true'
+        if: steps.final-stale-check.outputs.deploy == 'true'
         env:
           HOMELAB_SSH_KEY: ${{ secrets.HOMELAB_SSH_KEY }}
           HOMELAB_KNOWN_HOSTS: ${{ secrets.HOMELAB_KNOWN_HOSTS }}
         run: |
+          set -euo pipefail
+
           install -m 700 -d "$HOME/.ssh"
-          printf '%s\n' "$HOMELAB_SSH_KEY" > "$HOME/.ssh/homelab_deploy"
+
+          printf '%s\n' "$HOMELAB_SSH_KEY" \
+            > "$HOME/.ssh/homelab_deploy"
+
           chmod 600 "$HOME/.ssh/homelab_deploy"
-          printf '%s\n' "$HOMELAB_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+
+          printf '%s\n' "$HOMELAB_KNOWN_HOSTS" \
+            > "$HOME/.ssh/known_hosts"
+
           chmod 600 "$HOME/.ssh/known_hosts"
 
+      # --------------------------------------------------
+      # 5. Deploy the exact image built by CI
+      # --------------------------------------------------
+
       - name: Deploy exact CI image
-        if: steps.stale-check.outputs.deploy == 'true'
+        if: steps.final-stale-check.outputs.deploy == 'true'
         env:
           CI_SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
+          set -euo pipefail
+
           ssh \
             -i "$HOME/.ssh/homelab_deploy" \
             -o IdentitiesOnly=yes \

@@ -6,11 +6,13 @@ on:
       - "labs/05-docker-compose/**"
       - ".github/workflows/ci.yml"
       - ".github/workflows/cd.yml"
+
   pull_request:
     paths:
       - "labs/05-docker-compose/**"
       - ".github/workflows/ci.yml"
       - ".github/workflows/cd.yml"
+
   workflow_dispatch:
 
 permissions:
@@ -21,30 +23,213 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  test-build-scan:
+  validate-build-publish:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # --------------------------------------------------
+      # 1. Classify changed files
+      # --------------------------------------------------
+
+      - name: Classify changes
+        id: changes
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PUSH_BEFORE: ${{ github.event.before }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+          COMMIT_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+
+          if [[ "$EVENT_NAME" == "push" ]]; then
+            if [[ "$PUSH_BEFORE" =~ ^0+$ ]]; then
+              changed_files="$(git ls-files)"
+            else
+              changed_files="$(git diff --no-renames --name-only "$PUSH_BEFORE" "$COMMIT_SHA")"
+            fi
+
+          elif [[ "$EVENT_NAME" == "pull_request" ]]; then
+            changed_files="$(git diff --no-renames --name-only "$PR_BASE" "$PR_HEAD")"
+
+          else
+            # Manual runs perform the complete validation/build workflow.
+            changed_files="$(git ls-files)"
+          fi
+
+          run_tests=false
+          validate_lockfiles=false
+          validate_compose=false
+          validate_backup=false
+          image_changed=false
+
+          while IFS= read -r file; do
+            case "$file" in
+              labs/05-docker-compose/app.py|\
+              labs/05-docker-compose/test_app.py|\
+              labs/05-docker-compose/requirements.in|\
+              labs/05-docker-compose/requirements.txt|\
+              labs/05-docker-compose/requirements-dev.in|\
+              labs/05-docker-compose/requirements-dev.txt|\
+              labs/05-docker-compose/constraints-prod.txt)
+                run_tests=true
+                ;;
+            esac
+
+            case "$file" in
+              labs/05-docker-compose/requirements.in|\
+              labs/05-docker-compose/requirements.txt|\
+              labs/05-docker-compose/requirements-dev.in|\
+              labs/05-docker-compose/requirements-dev.txt|\
+              labs/05-docker-compose/constraints-prod.txt)
+                validate_lockfiles=true
+                ;;
+            esac
+
+            case "$file" in
+              labs/05-docker-compose/compose.yaml)
+                validate_compose=true
+                ;;
+            esac
+
+            case "$file" in
+              labs/05-docker-compose/scripts/backup-postgres.sh)
+                validate_backup=true
+                ;;
+            esac
+
+            case "$file" in
+              labs/05-docker-compose/Dockerfile|\
+              labs/05-docker-compose/app.py|\
+              labs/05-docker-compose/requirements.txt|\
+              labs/05-docker-compose/.dockerignore)
+                image_changed=true
+                ;;
+            esac
+          done <<< "$changed_files"
+
+          {
+            echo "run_tests=$run_tests"
+            echo "validate_lockfiles=$validate_lockfiles"
+            echo "validate_compose=$validate_compose"
+            echo "validate_backup=$validate_backup"
+            echo "image_changed=$image_changed"
+          } >> "$GITHUB_OUTPUT"
+
+          echo "Changed files:"
+          printf '%s\n' "$changed_files"
+
+          echo "Tests required: $run_tests"
+          echo "Lockfile validation required: $validate_lockfiles"
+          echo "Compose validation required: $validate_compose"
+          echo "Backup validation required: $validate_backup"
+          echo "Image build required: $image_changed"
+
+      # --------------------------------------------------
+      # 2. Python setup
+      # --------------------------------------------------
 
       - name: Set up Python
+        if: >-
+          steps.changes.outputs.run_tests == 'true' ||
+          steps.changes.outputs.validate_lockfiles == 'true'
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
 
-      - name: Install dependencies
-        run: |
-          python -m pip install -r labs/05-docker-compose/requirements-dev.txt
+      # --------------------------------------------------
+      # 3. Dependency lockfile validation
+      # --------------------------------------------------
 
-      - name: Run tests
+      - name: Validate dependency lockfiles
+        if: steps.changes.outputs.validate_lockfiles == 'true'
         working-directory: labs/05-docker-compose
-        run: python -m pytest --cov=app --cov-report=term-missing -v test_app.py
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          python -m venv "$RUNNER_TEMP/pip-tools-venv"
+
+          "$RUNNER_TEMP/pip-tools-venv/bin/python" -m pip install \
+            --disable-pip-version-check \
+            "pip-tools==7.6.2"
+
+          "$RUNNER_TEMP/pip-tools-venv/bin/pip-compile" \
+            --generate-hashes \
+            --no-upgrade \
+            --index-url=https://pypi.org/simple \
+            --output-file=requirements.txt \
+            requirements.in
+
+          "$RUNNER_TEMP/pip-tools-venv/bin/pip-compile" \
+            --generate-hashes \
+            --no-upgrade \
+            --index-url=https://pypi.org/simple \
+            --output-file=requirements-dev.txt \
+            requirements-dev.in
+
+          git diff --exit-code -- requirements.txt requirements-dev.txt
+
+      # --------------------------------------------------
+      # 4. Application tests
+      # --------------------------------------------------
+
+      - name: Install development dependencies
+        if: steps.changes.outputs.run_tests == 'true'
+        run: |
+          python -m pip install \
+            --disable-pip-version-check \
+            -r labs/05-docker-compose/requirements-dev.txt
+
+      - name: Run application tests
+        if: steps.changes.outputs.run_tests == 'true'
+        working-directory: labs/05-docker-compose
+        run: |
+          python -m pytest \
+            --cov=app \
+            --cov-report=term-missing \
+            -v test_app.py
+
+      # --------------------------------------------------
+      # 5. Compose configuration validation
+      # --------------------------------------------------
+
+      - name: Validate Docker Compose configuration
+        if: steps.changes.outputs.validate_compose == 'true'
+        working-directory: labs/05-docker-compose
+        env:
+          POSTGRES_PASSWORD: ci-placeholder
+          DB_PASSWORD: ci-placeholder
+          NOTES_IMAGE: sufiyankhan10/homelab-notes-api:ci-validation
+        run: |
+          docker compose -f compose.yaml config --quiet
+
+      # --------------------------------------------------
+      # 6. Backup script validation
+      # --------------------------------------------------
+
+      - name: Validate PostgreSQL backup script
+        if: steps.changes.outputs.validate_backup == 'true'
+        run: |
+          bash -n labs/05-docker-compose/scripts/backup-postgres.sh
+
+      # --------------------------------------------------
+      # 7. Build image only when image inputs change
+      # --------------------------------------------------
 
       - name: Set up Docker Buildx
+        if: steps.changes.outputs.image_changed == 'true'
         uses: docker/setup-buildx-action@v3
 
-      - name: Generate Docker image tags
+      - name: Generate image tags
+        if: steps.changes.outputs.image_changed == 'true'
         id: meta
         uses: docker/metadata-action@v5
         with:
@@ -54,6 +239,7 @@ jobs:
             type=raw,value=latest,enable={{is_default_branch}}
 
       - name: Build Docker image
+        if: steps.changes.outputs.image_changed == 'true'
         uses: docker/build-push-action@v6
         with:
           context: ./labs/05-docker-compose
@@ -61,7 +247,12 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
 
+      # --------------------------------------------------
+      # 8. Install and run Trivy
+      # --------------------------------------------------
+
       - name: Install Trivy
+        if: steps.changes.outputs.image_changed == 'true'
         env:
           TRIVY_VERSION: "0.70.0"
         run: |
@@ -82,8 +273,14 @@ jobs:
             "$BASE_URL/trivy_${TRIVY_VERSION}_checksums.txt" \
             -o checksums.txt
 
-          awk -v file="$ARCHIVE" '$2 == file {print}' checksums.txt \
-            | sha256sum --check -
+          checksum_line="$(awk -v file="$ARCHIVE" '$2 == file {print}' checksums.txt)"
+
+          if [[ -z "$checksum_line" ]]; then
+            echo "ERROR: No checksum found for $ARCHIVE"
+            exit 1
+          fi
+
+          printf '%s\n' "$checksum_line" | sha256sum --check -
 
           tar -xzf "$ARCHIVE" trivy
 
@@ -94,29 +291,89 @@ jobs:
           trivy --version
 
       - name: Scan image with Trivy
+        if: steps.changes.outputs.image_changed == 'true'
         uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: sufiyankhan10/homelab-notes-api:sha-${{ github.sha }}
           format: table
-          exit-code: '1'
+          exit-code: "1"
           ignore-unfixed: true
           vuln-type: os,library
           scanners: vuln
           severity: CRITICAL,HIGH
           skip-setup-trivy: true
 
+      # --------------------------------------------------
+      # 9. Publish only successfully scanned main images
+      # --------------------------------------------------
+
       - name: Log in to Docker Hub
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        if: >-
+          steps.changes.outputs.image_changed == 'true' &&
+          github.event_name == 'push' &&
+          github.ref == 'refs/heads/main'
         uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Publish scanned image
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        if: >-
+          steps.changes.outputs.image_changed == 'true' &&
+          github.event_name == 'push' &&
+          github.ref == 'refs/heads/main'
         env:
           IMAGE_TAGS: ${{ steps.meta.outputs.tags }}
         run: |
+          set -euo pipefail
+
           while IFS= read -r tag; do
-            [ -z "$tag" ] || docker push "$tag"
+            [[ -z "$tag" ]] || docker push "$tag"
           done <<< "$IMAGE_TAGS"
+
+      # --------------------------------------------------
+      # 10. Create deployment manifest for CD
+      # --------------------------------------------------
+
+      - name: Create deployment manifest
+        if: >-
+          github.event_name == 'push' &&
+          github.ref == 'refs/heads/main'
+        env:
+          IMAGE_CHANGED: ${{ steps.changes.outputs.image_changed }}
+        run: |
+          set -euo pipefail
+
+          image_ref=""
+
+          if [[ "$IMAGE_CHANGED" == "true" ]]; then
+            image_ref="sufiyankhan10/homelab-notes-api:sha-${GITHUB_SHA}"
+          fi
+
+          jq -n \
+            --arg repository "$GITHUB_REPOSITORY" \
+            --arg commit_sha "$GITHUB_SHA" \
+            --arg image_ref "$image_ref" \
+            --argjson deploy_required "$IMAGE_CHANGED" \
+            '{
+              schema_version: 1,
+              repository: $repository,
+              commit_sha: $commit_sha,
+              deploy_required: $deploy_required,
+              image_ref: (
+                if $deploy_required then $image_ref else null end
+              )
+            }' > "$RUNNER_TEMP/deployment-manifest.json"
+
+          cat "$RUNNER_TEMP/deployment-manifest.json"
+
+      - name: Upload deployment manifest
+        if: >-
+          github.event_name == 'push' &&
+          github.ref == 'refs/heads/main'
+        uses: actions/upload-artifact@v4
+        with:
+          name: deployment-manifest-${{ github.sha }}
+          path: ${{ runner.temp }}/deployment-manifest.json
+          if-no-files-found: error
+          retention-days: 7
