@@ -4,21 +4,23 @@
 
 Migrate a manually managed Flask and PostgreSQL application into a Docker Compose environment while preserving existing database data.
 
-This lab covers container orchestration, service communication, persistent storage, health checks, runtime security, automated testing, Docker image publishing and remote deployment.
+This lab covers container orchestration, service communication, persistent storage, health checks, runtime security, automated testing, Docker image publishing, and remote deployment.
 
 ## Architecture
 
 ```mermaid
 flowchart TD
-    A[GitHub Repository] --> B[GitHub Actions]
-    B --> C[Run Pytest]
-    C --> D[Build Docker Image]
-    D --> E[Push SHA-tagged Image to Docker Hub]
-    E --> F[Tailscale Network]
-    F --> G[Restricted SSH Deployment]
-    G --> H[Homelab Server]
-    H --> I[Flask Notes API]
-    I --> J[(PostgreSQL 16)]
+    A[GitHub Repository] --> B[GitHub Actions CI]
+    B --> C[Automated Tests]
+    C --> D[Docker Image Build]
+    D --> E[Docker Hub: SHA-tagged Image]
+    E --> F[GitHub Actions CD]
+    F --> G[Tailscale Network]
+    G --> H[Restricted SSH Deployment]
+    H --> I[Root-controlled Deployment Helper]
+    I --> J[Docker Compose]
+    J --> K[Flask Notes API]
+    K --> L[(PostgreSQL 16)]
 ```
 
 ### Application Stack
@@ -30,10 +32,10 @@ flowchart TD
 | Python | 3.12 |
 | Database | PostgreSQL 16 |
 | Container orchestration | Docker Compose |
-| Application image | `sufiyankhan10/homelab-notes-api` |
+| Application image | Public Docker Hub image |
 | Application port | `127.0.0.1:5000` |
-| Database storage | External Docker volume `pgdata` |
-| Docker network | External network `notes-net` |
+| Database storage | External Docker volume |
+| Docker network | External Docker network |
 | Container user | Non-root UID 10001 |
 
 ## 1. Docker Compose Configuration
@@ -42,7 +44,7 @@ The application and database run as separate services within a shared Docker net
 
 ### Application service
 
-The application uses a prebuilt Docker image specified through the `NOTES_IMAGE` environment variable in the repository's Compose configuration.
+The application uses a prebuilt Docker image specified through the `NOTES_IMAGE` environment variable.
 
 ```yaml
 app:
@@ -71,7 +73,7 @@ app:
 
 ### Database service
 
-PostgreSQL uses a persistent Docker volume and a health check based on `pg_isready`.
+PostgreSQL uses persistent storage and a health check based on `pg_isready`.
 
 ```yaml
 db:
@@ -93,22 +95,24 @@ db:
 
 ### Service communication
 
-- Both services communicate through the external `notes-net` Docker network.
+- Both services communicate through an external Docker network.
 - The application connects to PostgreSQL using the service name `db`.
 - Docker Compose waits for the database health check to pass before starting the application.
 - The application port is bound to `127.0.0.1:5000`, rather than being exposed on every host network interface.
 
 ### Environment configuration
 
-Database credentials are provided through environment variables.
+Database credentials are supplied through environment variables.
 
-The `.env` file is excluded from Git using `.gitignore`. An `.env.example` file can be committed to document the required configuration without exposing credentials.
+The `.env` file is excluded from Git using `.gitignore`. An `.env.example` file can document the required configuration without containing actual credentials.
 
-Restrict the actual `.env` file permissions:
+Restrict the permissions of the actual `.env` file:
 
 ```bash
 chmod 600 .env
 ```
+
+Never commit real passwords, tokens, private keys, or credential-bearing environment files.
 
 ## 2. Persistent Storage
 
@@ -123,7 +127,7 @@ volumes:
 
 The volume is managed independently of the application container lifecycle.
 
-This means recreating or updating the application container does not require recreating the database container or deleting its data volume.
+Recreating or updating the application container does not require recreating the database container or deleting its data volume.
 
 The Docker network is also declared as external:
 
@@ -133,6 +137,10 @@ networks:
     external: true
     name: notes-net
 ```
+
+This allows the application and database to use an independently managed network.
+
+**Important:** Never use `docker compose down -v` as routine cleanup for this environment. External database storage must be preserved.
 
 ## 3. Container Security Hardening
 
@@ -151,33 +159,32 @@ The application container uses several runtime security controls.
 
 The Dockerfile creates a dedicated non-root application user and starts Gunicorn with two workers.
 
-These controls reduce the container's privileges and limit unnecessary writable access.
+These controls reduce container privileges and restrict unnecessary writable access.
 
-## 4. Health Checks
+They are defense-in-depth measures, not a replacement for application security, image scanning, or host-level security.
 
-Two separate health checks are used.
+## 4. Health Checks and Readiness
 
-**PostgreSQL health check**
+The application and database use separate health checks.
 
-Docker Compose uses `pg_isready` to check whether PostgreSQL is accepting connections.
+### PostgreSQL health check
 
-**Application health check**
+Docker Compose uses `pg_isready` to determine whether PostgreSQL is accepting connections.
 
-The Dockerfile defines an image-level health check against:
+### Application health check
 
-```text
-http://127.0.0.1:5000/health
-```
+The Flask application exposes two relevant endpoints:
 
-The Flask application exposes a health endpoint returning:
+| Endpoint | Purpose |
+|---|---|
+| `/health` | Checks whether the API is responding |
+| `/ready` | Checks application readiness, including database connectivity |
 
-```json
-{
-  "status": "ok"
-}
-```
+The image-level health check uses the application health endpoint.
 
-The application health endpoint confirms that the Flask API is responding. It does not independently establish PostgreSQL availability; database health is checked separately.
+The deployment process uses the readiness endpoint to verify that the application can serve requests with its database dependency available.
+
+This distinction is important: an API process can respond to a health request while its database connection is unavailable.
 
 ## 5. Automated Testing
 
@@ -189,117 +196,117 @@ The workflow executes:
 python -m pytest --cov=app --cov-report=term-missing -v test_app.py
 ```
 
-The six tests cover:
+The tests cover application behavior, including:
 
-| Test | Purpose |
-|---|---|
-| `test_health` | Health endpoint response |
-| `test_list_notes` | Retrieving notes |
-| `test_add_note` | Inserting a note |
-| `test_list_notes_database_error` | Handling database errors during retrieval |
-| `test_add_note_database_error` | Handling database errors during insertion |
-| `test_get_conn_uses_environment_configuration` | Reading database configuration from environment variables |
+- Health and readiness endpoints.
+- Retrieving notes.
+- Inserting notes.
+- Database error handling.
+- Reading database configuration from environment variables.
 
-Database interactions in these tests are mocked using Python's `unittest.mock`. The suite tests application behavior and error handling without connecting to a live PostgreSQL instance.
+Database interactions in the unit tests are mocked using Python's `unittest.mock`.
+
+The suite verifies application behavior and error handling without requiring a live PostgreSQL instance.
+
+A separate integration-test layer against a real PostgreSQL instance remains a possible improvement.
 
 ## 6. CI/CD Pipeline
 
-The GitHub Actions workflow is located at:
+CI and CD are maintained as separate GitHub Actions workflows.
+
+### Continuous Integration
+
+Workflow:
 
 ```text
 .github/workflows/ci.yml
 ```
 
-The pipeline automates testing, Docker image creation, publishing and deployment.
+The CI pipeline:
 
-### Pipeline stages
+1. Runs on relevant pushes and pull requests.
+2. Sets up Python 3.12.
+3. Installs development dependencies.
+4. Runs pytest with coverage.
+5. Builds the Docker image.
+6. Runs the configured container image security scan.
+7. Publishes the image to Docker Hub on pushes to `main`.
 
-1. **Trigger:** Runs on pushes and pull requests, excluding Markdown-only changes.
-2. **Testing:** Sets up Python 3.12, installs development dependencies and runs pytest with coverage.
-3. **Docker build:** Builds the application image using Docker Buildx.
-4. **Image publishing:** On pushes to `main`, authenticates with Docker Hub and publishes the image.
-5. **Image tagging:** Publishes a full commit SHA tag and the `latest` tag for the default branch.
-6. **Network access:** Connects the GitHub Actions runner to the homelab through Tailscale.
-7. **SSH authentication:** Uses a dedicated deployment key and strict host-key verification.
-8. **Remote deployment:** Sends the SHA-tagged image identifier to the server-side deployment command.
+Published images use a full commit SHA tag and a `latest` tag for the default branch.
 
-Pull requests and non-main pushes run the test and build stages without publishing or deploying the image.
+Pull requests and non-main pushes run validation without publishing or deploying the image.
 
-### Remote deployment
+### Continuous Deployment
 
-The deployment command is installed on the homelab server at:
+Workflow:
 
 ```text
-/usr/local/sbin/deploy-notes-app
+.github/workflows/cd.yml
 ```
 
-The SSH key is restricted to this deployment command rather than providing general-purpose shell access.
+The CD workflow runs after successful CI on `main`.
 
-The server-side deployment process:
+Its deployment process uses:
 
-1. Validates the received SHA tag against the expected format.
-2. Exports the validated tag as `NOTES_IMAGE_TAG`.
-3. Pulls the corresponding Docker Hub application image.
+1. A GitHub Actions runner.
+2. Tailscale connectivity to the homelab.
+3. SSH with strict host-key verification.
+4. A restricted deployment account.
+5. A server-side deployment wrapper and root-controlled helper.
+6. A SHA-tagged Docker image.
+
+The deployment account does not require membership in the Docker or sudo groups.
+
+Instead, SSH access is restricted to a specific deployment command. The server validates the requested image tag before invoking the root-controlled deployment helper.
+
+### Remote deployment process
+
+The server-side helper:
+
+1. Validates the supplied SHA-tagged image identifier.
+2. Checks that the image belongs to the expected application repository.
+3. Pulls the requested image.
 4. Updates only the application service using:
 
 ```bash
 docker compose up -d --no-deps app
 ```
 
-5. Waits for the API health endpoint, retrying for up to approximately 60 seconds.
-6. Reports deployment success if the endpoint responds.
-7. Prints recent application logs and exits unsuccessfully if the health check fails.
+5. Waits for the expected image to run.
+6. Checks application readiness, including database connectivity.
+7. Reports success only after the required verification succeeds.
 
-The server uses a deployment-specific Compose configuration with the image reference:
+The deployment process also implements rollback.
 
-```yaml
-image: sufiyankhan10/homelab-notes-api:${NOTES_IMAGE_TAG:?NOTES_IMAGE_TAG is required}
-```
+If deployment or post-deployment health verification fails, the helper attempts to restore the previous application image and verifies the recovered application.
 
-This configuration is separate from the tracked repository Compose file, which uses `NOTES_IMAGE`.
+The rollback mechanism was tested by deliberately triggering a health-verification failure. The previous image was restored and returned to a healthy state.
 
-The deployment updates the application service without explicitly recreating or updating the PostgreSQL service.
+This test validates the rollback mechanism; it does not represent a real application regression.
+
+The PostgreSQL service and its persistent volume are not explicitly recreated as part of an application-only deployment.
 
 ## 7. Deployment Verification
 
 The deployment was verified on the homelab server.
 
-### Application health
+### Application readiness
 
 ```bash
-curl -i http://127.0.0.1:5000/health
+curl -i http://127.0.0.1:5000/ready
 ```
 
-Expected response:
-
-```json
-{
-  "status": "ok"
-}
-```
-
-The endpoint returned HTTP 200.
+The readiness endpoint returned HTTP 200 during successful verification.
 
 ### Notes API
 
 ```bash
-curl -s http://127.0.0.1:5000/notes
+curl -sS http://127.0.0.1:5000/notes
 ```
 
-The application returned the existing records:
+The endpoint returned the expected application response, confirming that the API could retrieve records from PostgreSQL.
 
-```json
-[
-  {
-    "id": 1,
-    "txt": "survives container delete"
-  },
-  {
-    "id": 34,
-    "txt": "Docker network DNS works"
-  }
-]
-```
+Actual note contents and database identifiers are intentionally omitted from this public documentation.
 
 ### Container status
 
@@ -307,32 +314,44 @@ The application returned the existing records:
 docker compose ps
 ```
 
-Both the application and PostgreSQL containers were reported healthy during verification.
+Both application and PostgreSQL containers were reported healthy during verification.
 
-The deployed application image was also checked against its full SHA-tagged Docker image reference.
+The deployed application image was also checked against its full SHA-tagged image reference.
 
-Two automated deployments have been verified. The subsequent deployment used a workflow-configuration-only commit, so a fresh application-code deployment remains a separate verification step.
+Two automated deployments were previously verified. The subsequent deployment used a workflow-configuration-only commit, so a fresh application-code deployment remains a separate verification step.
 
 ## 8. Backup and Recovery
 
-PostgreSQL backup automation is documented separately:
+PostgreSQL backup automation and recovery are documented separately:
 
 - [PostgreSQL Backup and Restore](../04-postgresql-backup-restore/README.md)
 - [Backup Automation Guide](../../docs/postgres-backup-automation.md)
 
-The backup process uses PostgreSQL custom-format dumps, archive validation, concurrency protection and retention of the seven newest backups.
+The backup implementation uses:
 
-An isolated database restore test was also performed to verify that backup data could be restored without modifying the running application database.
+- PostgreSQL custom-format dumps.
+- Archive validation with `pg_restore --list`.
+- Concurrency protection using `flock`.
+- Temporary files and atomic file replacement.
+- Retention of the seven newest matching backups.
+- A root-owned systemd oneshot service.
+
+An isolated PostgreSQL restore test was also performed to verify that backup data could be recovered without modifying the running application database.
+
+Archive validation and an actual restore test provide different levels of recovery evidence. A valid archive listing alone does not prove that a database can be successfully restored.
 
 ## 9. Limitations and Next Steps
 
-The current implementation has some remaining work:
+The current implementation has some remaining improvement opportunities:
 
 - Add integration tests against a real PostgreSQL instance.
-- Implement and test automatic rollback for failed deployments.
 - Verify deployment following a fresh application-code change.
-- Consider workflow concurrency controls to prevent overlapping deployments.
-- Evaluate branch-protection behavior before making the workflow a required status check, because Markdown-only changes are excluded from workflow execution.
+- Continue testing rollback under different failure scenarios.
+- Evaluate branch-protection behavior before making workflow checks required, because Markdown-only changes are excluded from workflow execution.
+- Consider off-host backup storage to improve resilience against server or disk failure.
+- Expand recovery testing beyond basic archive validation and row-count checks.
+
+The environment is a personal homelab used for learning and engineering practice, not a production service.
 
 ## 10. Outcome
 
@@ -345,7 +364,9 @@ This lab demonstrates a progression from manually managed application containers
 - Docker image building and publishing.
 - Tailscale-based remote access.
 - Restricted SSH deployment.
-- Application health verification.
+- Root-controlled deployment operations.
+- Application readiness verification.
+- Tested deployment rollback.
 - PostgreSQL backup and recovery practices.
 
-The environment is a personal homelab used for learning and engineering practice, not a production service.
+The implementation provides practical experience with container orchestration, application deployment, infrastructure security, and operational recovery.
