@@ -4,11 +4,11 @@
 
 This document describes the PostgreSQL backup automation implemented for the Docker Compose notes application running on a homelab server.
 
-The workflow uses Bash, Docker, PostgreSQL utilities, and systemd to create timestamped PostgreSQL custom-format backups, validate the resulting archives, and retain the seven newest matching backup files.
+The current implementation uses a root-owned Bash script, Docker, PostgreSQL utilities, and systemd to create timestamped PostgreSQL custom-format backups, validate the resulting archives, and retain the seven newest matching backup files.
 
-A successful backup is recorded against the local calendar date to prevent duplicate successful backups on the same day.
+A successful backup is recorded against the server's local calendar date. This prevents duplicate successful backups on the same day.
 
-The systemd service is configured for startup-triggered execution. The previous daily 2 AM timer is disabled, so the service does not guarantee a new backup every day while the server remains running.
+The systemd service is enabled for startup-triggered execution. It waits five minutes after the service is triggered before running the backup script. The previous daily 2 AM timer is disabled, so this configuration does not guarantee a new backup every day while the server remains online.
 
 ## Environment
 
@@ -20,50 +20,57 @@ The systemd service is configured for startup-triggered execution. The previous 
 | Database name | `postgres` |
 | Database user | `postgres` |
 | Backup format | PostgreSQL custom archive (`pg_dump -Fc`) |
-| Backup directory | `/home/sufiyan/lab/notes-app/backups/` |
-| Backup script | Bash |
+| Backup directory | `/var/backups/homelab/notes-app/` |
+| Backup script on server | `/usr/local/sbin/homelab-postgres-backup` |
+| Script owner and permissions | `root:root`, `0700` |
+| systemd service | `homelab-postgres-backup-root.service` |
 | Automation | systemd oneshot service |
 | Retention policy | Seven newest matching dump files |
 
-The container name, database configuration, and absolute filesystem paths are specific to the current homelab environment.
+The container name, database configuration, and absolute filesystem paths are specific to the current homelab environment. They should be reviewed before adapting this implementation to another server.
 
 ## Repository Files
 
-- Backup script: [`labs/05-docker-compose/scripts/backup-postgres.sh`](../labs/05-docker-compose/scripts/backup-postgres.sh)
+- Repository backup script: [`labs/05-docker-compose/scripts/backup-postgres.sh`](../labs/05-docker-compose/scripts/backup-postgres.sh)
 - Docker Compose lab: [`labs/05-docker-compose/README.md`](../labs/05-docker-compose/README.md)
 - Backup and restore lab: [`labs/04-postgresql-backup-restore/README.md`](../labs/04-postgresql-backup-restore/README.md)
 
-The script must be reviewed and adapted before use on another server. Its current configuration should not be assumed to work unchanged in a different environment.
+**Implementation distinction:** The script stored in the repository is a lab/reference script. The currently deployed server implementation is the separately installed root-owned script at `/usr/local/sbin/homelab-postgres-backup`. Do not assume the repository script is identical to the deployed script.
+
+The server script and its configuration must be reviewed and adapted before use on another machine.
 
 ## Backup Workflow
 
-The backup script performs the following operations:
+The deployed backup script performs the following operations:
 
-1. Enables strict Bash error handling and restrictive default file permissions.
-2. Creates the backup directory if necessary and applies directory permissions of `700`.
+1. Enables strict Bash error handling and sets a restrictive default file-creation mask.
+2. Creates the backup directory if necessary and applies directory permissions of `0700`.
 3. Acquires a non-blocking file lock to prevent concurrent backup processes.
 4. Checks whether a successful backup has already been recorded for the current local calendar date.
-5. Checks whether the PostgreSQL container is running and whether PostgreSQL is accepting connections.
-6. Retries readiness checks up to 30 times, with a 10-second sleep between unsuccessful attempts.
+5. Checks whether the PostgreSQL container is available.
+6. Waits for PostgreSQL readiness, retrying up to 30 times with a 10-second interval.
 7. Creates a temporary backup file inside the backup directory.
 8. Runs `pg_dump` to create a custom-format database archive.
 9. Rejects an empty backup file.
 10. Validates the archive using `pg_restore --list`.
-11. Applies file permissions of `600` to the completed temporary archive.
+11. Applies file permissions of `0600` to the completed temporary archive.
 12. Moves the validated archive to its timestamped final filename.
 13. Retains the seven newest matching dump files and removes older matching files.
 14. Writes the successful backup date to a temporary state file and atomically moves it into place.
 15. Logs successful completion.
 
-The script uses an exit trap to remove temporary backup and state files if they remain when the script exits.
+The script also uses an exit trap to remove temporary backup and state files if they remain when the script exits.
 
 ### Backup Validation
 
-The script checks both that the generated file is non-empty and that PostgreSQL can read its archive structure using `pg_restore --list`.
+The script checks that:
 
-These checks help reject incomplete or unreadable backup files before they are accepted as completed backups.
+- The generated archive is non-empty.
+- PostgreSQL can read its archive structure using `pg_restore --list`.
 
-However, archive validation is not equivalent to restoring the database. Recovery testing must be performed separately.
+These checks help reject incomplete or unreadable archive files before they are accepted as completed backups.
+
+However, archive listing validation is not equivalent to restoring the database. Recovery testing must be performed separately.
 
 ## Backup Naming
 
@@ -73,7 +80,7 @@ Backup filenames use the following format:
 
 Example:
 
-`notes-db-2026-10-28-132725.dump`
+`notes-db-2026-11-06-162336.dump`
 
 The date and time in the filename are based on the server's local clock when the script initializes.
 
@@ -81,7 +88,7 @@ The naming convention makes backups identifiable by their creation timestamp and
 
 ## Permissions and Runtime State
 
-The script uses:
+The deployed script uses:
 
 ```bash
 umask 077
@@ -89,18 +96,20 @@ umask 077
 
 This restricts default permissions for newly created files and directories to the owning user, subject to the permissions applied by the script and filesystem.
 
-| Item | Expected permissions or behavior |
+| Item | Verified configuration or behavior |
 |---|---|
-| Backup directory | `700` |
-| Completed backup archive | `600` |
-| Backup script on the homelab | `700` |
+| Backup directory | `root:root`, `0700` |
+| Completed backup archives | `root:root`, `0600` |
+| Backup script on the server | `root:root`, `0700` |
+| systemd service user | `root` |
+| systemd service group | `root` |
 | systemd service umask | `0077` |
 | `.backup.lock` | Runtime file used for process locking |
 | `.last-successful-backup-date` | Records the last successful backup date |
 | Temporary backup file | Created inside the backup directory and removed on exit if it remains |
 | Temporary state file | Used when recording successful completion |
 
-The script's lock and success-state files are operational runtime state. They should not be committed to the repository.
+The lock and success-state files are operational runtime state. They should not be committed to the repository.
 
 Database dumps, credentials, private keys, and temporary environment files must not be published in Git.
 
@@ -108,68 +117,121 @@ Database dumps, credentials, private keys, and temporary environment files must 
 
 The service unit is installed on the homelab server at:
 
-`/etc/systemd/system/homelab-postgres-backup.service`
+`/etc/systemd/system/homelab-postgres-backup-root.service`
 
-The documented service configuration:
+The service is named:
+
+`homelab-postgres-backup-root.service`
+
+Its verified configuration is:
+
+```ini
+[Unit]
+Description=Homelab PostgreSQL Backup (Root)
+Requires=docker.service
+After=docker.service
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+UMask=0077
+TimeoutStartSec=15min
+ExecStartPre=/bin/sleep 300
+ExecStart=/usr/local/sbin/homelab-postgres-backup
+
+[Install]
+WantedBy=multi-user.target
+```
+
+The service:
 
 - Requires Docker and runs after Docker starts.
-- Executes the backup script as the local `sufiyan` account.
+- Executes the backup script as `root`.
 - Applies a restrictive service umask of `0077`.
-- Waits five minutes before starting the backup script.
-- Has a 15-minute startup timeout.
+- Waits 300 seconds (five minutes) before executing the backup script.
+- Has a 15-minute service start timeout.
 - Is enabled for startup through `multi-user.target`.
 
-The service uses oneshot execution, meaning it runs its configured operation and exits rather than remaining active as a continuously running application.
+The service uses oneshot execution. It runs its configured operation and exits rather than remaining active as a continuously running application.
+
+After a successful execution, systemd may show the service as `inactive (dead)`. This is normal for a completed oneshot service; the execution result and service logs should be checked to determine whether it succeeded.
 
 ### Startup Delay and Readiness Checks
 
-The service includes a five-minute pre-start delay. After that delay, the backup script performs its own PostgreSQL readiness checks.
+The service includes a five-minute pre-start delay through:
 
-The script allows up to 30 attempts with a 10-second sleep after each unsuccessful attempt. If PostgreSQL does not become ready, the script logs an error and exits unsuccessfully.
+```ini
+ExecStartPre=/bin/sleep 300
+```
 
-The service's configured startup timeout and the script's retry behavior should be considered together when troubleshooting a failed startup-triggered backup.
+After this delay, the backup script performs its own PostgreSQL readiness checks.
 
-### Timer Status
+The script allows up to 30 attempts, with a 10-second sleep between unsuccessful attempts. If PostgreSQL does not become ready, the script exits unsuccessfully.
 
-The previous daily 2 AM systemd timer is disabled.
-
-The service being enabled does not mean that a daily timer is active. These are separate systemd mechanisms.
+The service's configured 15-minute timeout and the script's retry behavior should be considered together when troubleshooting a failed startup-triggered backup.
 
 ## Daily Execution Behavior
 
 The script records the current local calendar date only after the backup and retention operations have completed successfully.
 
-When another invocation occurs on the same date and the recorded successful date matches today's date, the script skips the backup.
+When another invocation occurs on the same date and the recorded successful date matches today's date, the script skips another backup.
 
-If an attempt fails before the successful date is recorded, a later invocation can try again. However, the current service configuration does not automatically retry failed executions.
+If an attempt fails before the successful date is recorded, a later invocation can try again. However, the current service configuration does not establish a recurring retry schedule.
 
 This is startup-triggered automation, not a recurring daily schedule:
 
 - A successful startup-triggered run can create a backup.
 - A subsequent run on the same local calendar date skips another backup.
 - If the server remains powered off, no backup can run.
-- If the server stays online across multiple days without another trigger, this service alone does not guarantee a backup every day.
+- If the server stays online across multiple days without another service trigger, this service alone does not guarantee a backup every day.
 
 If daily backups are required while the server remains online, a recurring schedule should be configured and tested separately.
 
 ## Validation Performed
 
-The following checks were documented as completed during implementation and operational testing:
+The following implementation and operational checks have been performed:
 
 - [x] Bash syntax validation using `bash -n`.
-- [x] Inspection of the systemd service configuration.
+- [x] Inspection of the root-owned systemd service configuration.
 - [x] Confirmation that the service is enabled.
-- [x] Confirmation that the previous timer is disabled.
+- [x] Confirmation that the previous daily timer is disabled.
 - [x] Confirmation that Docker is active.
-- [x] Successful manual execution of the systemd service.
-- [x] Successful creation and archive validation of a PostgreSQL dump.
+- [x] Successful execution of the systemd backup service.
+- [x] Successful creation and archive validation of PostgreSQL dumps.
 - [x] Verification of the recorded successful-backup date.
-- [x] Verification that a second script invocation on the same day skips the backup.
+- [x] Verification that a second invocation on the same day skips the backup.
 - [x] Verification of automatic service startup after a server reboot.
 - [x] Verification that the five-minute startup delay completed and the backup script executed.
-- [x] Verification that the script skipped a duplicate backup when a successful backup was already recorded for that day.
+- [x] Verification that the service skipped duplicate backups when a successful backup was already recorded for that day.
+- [x] Inspection of backup directory ownership and permissions.
+- [x] Inspection of retained backup archives and systemd journal entries.
 
-These checks establish evidence for the documented implementation and test runs. They do not guarantee that every future execution will succeed.
+### Observed Backup Evidence
+
+The backup directory was inspected on 6 November 2026.
+
+The following seven archives were retained at that time:
+
+| Backup archive | Size |
+|---|---:|
+| `notes-db-2026-11-01-133100.dump` | 2,599 bytes |
+| `notes-db-2026-11-01-173137.dump` | 2,599 bytes |
+| `notes-db-2026-11-02-193939.dump` | 2,599 bytes |
+| `notes-db-2026-11-03-125032.dump` | 2,599 bytes |
+| `notes-db-2026-11-04-125923.dump` | 2,599 bytes |
+| `notes-db-2026-11-05-125029.dump` | 2,599 bytes |
+| `notes-db-2026-11-06-162336.dump` | 2,599 bytes |
+
+The success-state file contained:
+
+`2026-11-06`
+
+Systemd journal entries confirmed successful backup executions on 4, 5, and 6 November 2026. Additional invocations on 4 November correctly skipped execution when the successful backup date was already recorded.
+
+The seven retained files are the seven newest matching archives at the time of inspection. They should not be interpreted as seven consecutive daily backups: two retained archives are from 1 November.
+
+These observations establish evidence for the inspected configuration and test runs. They do not guarantee that every future execution will succeed.
 
 ## Recovery Testing
 
@@ -183,7 +245,10 @@ The test used the backup archive:
 
 The archive was restored into an isolated PostgreSQL environment. The documented verification included comparisons of selected record IDs and text hashes, along with the restored sequence state.
 
-The tested record IDs and text hashes matched, and the sequence reported `last_value = 34` with `is_called = true`.
+The tested record IDs and text hashes matched, and the sequence reported:
+
+- `last_value = 34`
+- `is_called = true`
 
 **Result:** The documented checks passed for the records and sequence state examined during this test.
 
@@ -209,10 +274,11 @@ After verification, the temporary restore container, its dedicated volume, and t
 
 - Backups are stored on the same physical machine as the database.
 - A disk failure or loss of the server could destroy both the database and its local backups.
+- Automatic recurring daily execution is not configured.
 - Automatic retries and failure notifications are not configured.
-- The disabled daily timer means the service does not guarantee recurring daily backups while the server remains online.
 - Archive listing validation does not replace a restore test.
-- Successful restoration and matching row counts do not independently prove that every database object, record, sequence, or application dependency has been recovered correctly.
+- The documented restore tests cover specific archives and checks; they do not establish that every database object, record, sequence, or application dependency can be recovered correctly.
+- The retention policy keeps only seven matching archives, so older local backups are removed as newer archives are retained.
 
 ### Potential Improvements
 
