@@ -327,14 +327,32 @@ PostgreSQL backup automation and recovery are documented separately:
 - [PostgreSQL Backup and Restore](../04-postgresql-backup-restore/README.md)
 - [Backup Automation Guide](../../docs/postgres-backup-automation.md)
 
-The backup implementation uses:
+The repository includes a configurable backup reference script:
+
+`scripts/backup-postgres.sh`
+
+It uses Docker Compose service discovery to locate the database container instead of relying on a hardcoded container name.
+
+The script supports configuration through environment variables:
+
+- `COMPOSE_FILE` — Compose configuration file.
+- `DB_SERVICE` — database service name (default: `db`).
+- `DB_NAME` and `DB_USER` — PostgreSQL database and user.
+- `BACKUP_DIR` — backup destination.
+- `RETENTION_COUNT` — number of matching archives to retain (default: `7`).
+
+The reference script includes:
 
 - PostgreSQL custom-format dumps.
+- Database readiness checks.
 - Archive validation with `pg_restore --list`.
 - Concurrency protection using `flock`.
 - Temporary files and atomic file replacement.
-- Retention of the seven newest matching backups.
-- A root-owned systemd oneshot service.
+- Configurable retention of the newest matching backups.
+
+**Deployment distinction:** The repository script is a lab/reference implementation. The deployed homelab backup uses a separately installed root-owned script managed by a systemd oneshot service. The repository script is not automatically deployed to the server.
+
+The deployed implementation uses a startup-triggered service with a five-minute delay, same-day duplicate prevention, and seven-file retention. It does not currently guarantee a recurring daily backup while the server remains online.
 
 An isolated PostgreSQL restore test was also performed to verify that backup data could be recovered without modifying the running application database.
 

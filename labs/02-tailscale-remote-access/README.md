@@ -35,7 +35,7 @@ Confirmed that both devices appeared in the tailnet.
 From the client:
 
 ```bash
-tailscale ping homelab-server
+tailscale ping <server-magicdns-name>
 ```
 
 A direct LAN path was observed while both devices were connected to the same home network.
@@ -51,7 +51,7 @@ SSH connectivity was successfully tested over a mobile-data hotspot using Tailsc
 ### 4. Test MagicDNS
 
 ```bash
-ssh <username>@homelab-server
+ssh <username>@<server-magicdns-name>
 ```
 
 Hostname-based SSH connectivity was successfully verified.

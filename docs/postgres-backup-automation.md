@@ -16,18 +16,18 @@ The systemd service is enabled for startup-triggered execution. It waits five mi
 |---|---|
 | Operating system | Ubuntu Server 24.04.5 LTS |
 | Database | PostgreSQL 16 |
-| Docker container | `notes-app-db-1` |
+| Docker Compose database service | `db` |
 | Database name | `postgres` |
 | Database user | `postgres` |
 | Backup format | PostgreSQL custom archive (`pg_dump -Fc`) |
-| Backup directory | `/var/backups/homelab/notes-app/` |
-| Backup script on server | `/usr/local/sbin/homelab-postgres-backup` |
+| Backup directory | Host-local backup directory |
+| Backup script on server | `/usr/local/sbin/postgres-backup` |
 | Script owner and permissions | `root:root`, `0700` |
-| systemd service | `homelab-postgres-backup-root.service` |
+| systemd service | `postgres-backup.service` |
 | Automation | systemd oneshot service |
 | Retention policy | Seven newest matching dump files |
 
-The container name, database configuration, and absolute filesystem paths are specific to the current homelab environment. They should be reviewed before adapting this implementation to another server.
+Runtime container identifiers and absolute filesystem paths are intentionally omitted from this public documentation.
 
 ## Repository Files
 
@@ -35,7 +35,7 @@ The container name, database configuration, and absolute filesystem paths are sp
 - Docker Compose lab: [`labs/05-docker-compose/README.md`](../labs/05-docker-compose/README.md)
 - Backup and restore lab: [`labs/04-postgresql-backup-restore/README.md`](../labs/04-postgresql-backup-restore/README.md)
 
-**Implementation distinction:** The script stored in the repository is a lab/reference script. The currently deployed server implementation is the separately installed root-owned script at `/usr/local/sbin/homelab-postgres-backup`. Do not assume the repository script is identical to the deployed script.
+**Implementation distinction:** The script stored in the repository is a lab/reference script. The currently deployed server implementation uses a separately installed root-owned backup script. Do not assume the repository script is identical to the deployed script.
 
 The server script and its configuration must be reviewed and adapted before use on another machine.
 
@@ -117,11 +117,11 @@ Database dumps, credentials, private keys, and temporary environment files must 
 
 The service unit is installed on the homelab server at:
 
-`/etc/systemd/system/homelab-postgres-backup-root.service`
+`/etc/systemd/system/postgres-backup.service`
 
 The service is named:
 
-`homelab-postgres-backup-root.service`
+`postgres-backup.service`
 
 Its verified configuration is:
 
@@ -138,7 +138,7 @@ Group=root
 UMask=0077
 TimeoutStartSec=15min
 ExecStartPre=/bin/sleep 300
-ExecStart=/usr/local/sbin/homelab-postgres-backup
+ExecStart=/usr/local/sbin/postgres-backup
 
 [Install]
 WantedBy=multi-user.target

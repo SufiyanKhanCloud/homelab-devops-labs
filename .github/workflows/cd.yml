@@ -23,6 +23,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
+    env:
+      HOMELAB_TAILSCALE_IP: ${{ vars.HOMELAB_TAILSCALE_IP }}
+      HOMELAB_DEPLOY_USER: ${{ vars.HOMELAB_DEPLOY_USER }}
+
     environment:
       name: homelab-production
 
@@ -73,7 +77,7 @@ jobs:
           oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
           audience: ${{ secrets.TS_AUDIENCE }}
           tags: tag:ci
-          ping: 100.88.34.81
+          ping: ${{ vars.HOMELAB_TAILSCALE_IP }}
 
       - name: Configure SSH
         if: steps.stale-check.outputs.deploy == 'true'
@@ -97,5 +101,5 @@ jobs:
             -o IdentitiesOnly=yes \
             -o BatchMode=yes \
             -o StrictHostKeyChecking=yes \
-            homelab-deploy@100.88.34.81 \
+            "${HOMELAB_DEPLOY_USER}@${HOMELAB_TAILSCALE_IP}" \
             "sha-${CI_SHA}"

@@ -35,7 +35,7 @@ The lab covers vulnerability assessment, machine-readable reporting, container h
 
 The historical JSON report is stored on the homelab server at:
 
-`/home/sufiyan/lab/notes-app/trivy-final.json`
+`trivy-final.json` in the application directory on the homelab server
 
 The report is not stored in this GitHub repository.
 
@@ -146,7 +146,7 @@ The following commands are intended to run on the homelab server, where the hist
 Change to the application directory:
 
 ```bash
-cd /home/sufiyan/lab/notes-app
+cd /path/to/notes-app  # Replace with your application directory
 ```
 
 ### Count Findings by Severity
@@ -312,7 +312,7 @@ These controls improve the deployment's security posture but do not eliminate al
 The running application container was inspected using Docker:
 
 ```bash
-docker inspect notes-app-app-1 \
+docker inspect "$(docker compose ps -q app)" \
   --format 'User={{.Config.User}} ReadonlyRootfs={{.HostConfig.ReadonlyRootfs}} CapDrop={{json .HostConfig.CapDrop}} SecurityOpt={{json .HostConfig.SecurityOpt}}'
 ```
 
@@ -348,7 +348,7 @@ docker ps --format 'table {{.Names}}\t{{.Status}}'
 ```bash
 docker inspect \
   --format '{{.Name}}: {{.State.Status}} / {{if .State.Health}}{{.State.Health.Status}}{{else}}no healthcheck{{end}}' \
-  notes-app-app-1
+  "$(docker compose ps -q app)"
 ```
 
 ### Check Database Health
@@ -356,7 +356,7 @@ docker inspect \
 ```bash
 docker inspect \
   --format '{{.Name}}: {{.State.Status}} / {{if .State.Health}}{{.State.Health.Status}}{{else}}no healthcheck{{end}}' \
-  notes-app-db-1
+  "$(docker compose ps -q db)"
 ```
 
 ### Test the Application Health Endpoint
@@ -374,7 +374,7 @@ curl -s http://127.0.0.1:5000/notes
 ### Check Published Ports
 
 ```bash
-docker port notes-app-app-1
+docker port "$(docker compose ps -q app)"
 ```
 
 The application health endpoint, API behavior, and data persistence were verified after the runtime hardening changes.

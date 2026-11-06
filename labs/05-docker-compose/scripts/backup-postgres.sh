@@ -3,16 +3,32 @@
 set -Eeuo pipefail
 umask 077
 
-CONTAINER="notes-app-db-1"
-DB_NAME="postgres"
-DB_USER="postgres"
-BACKUP_DIR="/home/sufiyan/lab/notes-app/backups"
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_DIR="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
+
+COMPOSE_FILE="${COMPOSE_FILE:-${PROJECT_DIR}/compose.yaml}"
+DB_SERVICE="${DB_SERVICE:-db}"
+DB_NAME="${DB_NAME:-postgres}"
+DB_USER="${DB_USER:-postgres}"
+BACKUP_DIR="${BACKUP_DIR:-${PROJECT_DIR}/backups}"
+RETENTION_COUNT="${RETENTION_COUNT:-7}"
+
+# Resolve relative paths from the project directory.
+if [[ "$COMPOSE_FILE" != /* ]]; then
+    COMPOSE_FILE="${PROJECT_DIR}/${COMPOSE_FILE}"
+fi
+
+if [[ "$BACKUP_DIR" != /* ]]; then
+    BACKUP_DIR="${PROJECT_DIR}/${BACKUP_DIR}"
+fi
+
 LAST_SUCCESS_FILE="${BACKUP_DIR}/.last-successful-backup-date"
 TIMESTAMP="$(date +%Y-%m-%d-%H%M%S)"
 TODAY="$(date +%F)"
 FINAL_FILE="${BACKUP_DIR}/notes-db-${TIMESTAMP}.dump"
 TEMP_FILE=""
 STATE_TEMP_FILE=""
+RETENTION_TEMP_FILE=""
 
 log() {
     printf '[%s] %s\n' "$(date '+%F %T')" "$*"
@@ -26,12 +42,39 @@ cleanup() {
     if [[ -n "${STATE_TEMP_FILE:-}" && -f "$STATE_TEMP_FILE" ]]; then
         rm -f -- "$STATE_TEMP_FILE"
     fi
+
+    if [[ -n "${RETENTION_TEMP_FILE:-}" && -f "$RETENTION_TEMP_FILE" ]]; then
+        rm -f -- "$RETENTION_TEMP_FILE"
+    fi
 }
 
 trap cleanup EXIT
 
-mkdir -p "$BACKUP_DIR"
-chmod 700 "$BACKUP_DIR"
+if [[ ! -f "$COMPOSE_FILE" ]]; then
+    log "ERROR: Compose file not found: $COMPOSE_FILE"
+    exit 1
+fi
+
+if [[ ! "$RETENTION_COUNT" =~ ^[1-9][0-9]*$ ]]; then
+    log "ERROR: RETENTION_COUNT must be a positive integer."
+    exit 1
+fi
+
+for command in docker flock find sort tail mktemp seq; do
+    if ! command -v "$command" >/dev/null 2>&1; then
+        log "ERROR: Required command not found: $command"
+        exit 1
+    fi
+done
+
+if ! docker compose version >/dev/null 2>&1; then
+    log "ERROR: Docker Compose plugin is not available."
+    exit 1
+fi
+
+cd "$PROJECT_DIR"
+
+mkdir -p -m 700 "$BACKUP_DIR"
 
 exec 9>"${BACKUP_DIR}/.backup.lock"
 
@@ -49,11 +92,18 @@ fi
 log "Waiting for PostgreSQL to become ready."
 
 READY=0
+CONTAINER_ID=""
 
 for ATTEMPT in $(seq 1 30); do
-    if [[ "$(docker inspect -f '{{.State.Running}}' "$CONTAINER" 2>/dev/null || true)" != "true" ]]; then
-        log "PostgreSQL container is not running (attempt ${ATTEMPT}/30)."
-    elif docker exec "$CONTAINER" pg_isready -U "$DB_USER" -d "$DB_NAME" >/dev/null 2>&1; then
+    CONTAINER_ID="$(
+        docker compose -f "$COMPOSE_FILE" ps -q "$DB_SERVICE" 2>/dev/null || true
+    )"
+
+    if [[ -z "$CONTAINER_ID" ]]; then
+        log "Database service container not found (attempt ${ATTEMPT}/30)."
+    elif [[ "$(docker inspect -f '{{.State.Running}}' "$CONTAINER_ID" 2>/dev/null || true)" != "true" ]]; then
+        log "Database container is not running (attempt ${ATTEMPT}/30)."
+    elif docker exec "$CONTAINER_ID" pg_isready -U "$DB_USER" -d "$DB_NAME" >/dev/null 2>&1; then
         READY=1
         break
     else
@@ -72,7 +122,7 @@ TEMP_FILE="$(mktemp "${BACKUP_DIR}/.notes-db-backup.XXXXXX.tmp")"
 
 log "Starting PostgreSQL backup."
 
-if ! docker exec "$CONTAINER" pg_dump \
+if ! docker exec "$CONTAINER_ID" pg_dump \
     -U "$DB_USER" \
     -d "$DB_NAME" \
     -Fc > "$TEMP_FILE"; then
@@ -85,7 +135,7 @@ if [[ ! -s "$TEMP_FILE" ]]; then
     exit 1
 fi
 
-if ! docker exec -i "$CONTAINER" pg_restore --list \
+if ! docker exec -i "$CONTAINER_ID" pg_restore --list \
     < "$TEMP_FILE" > /dev/null; then
     log "ERROR: Backup archive validation failed."
     exit 1
@@ -97,13 +147,20 @@ TEMP_FILE=""
 
 log "Backup created and validated: $FINAL_FILE"
 
-mapfile -t OLD_BACKUPS < <(
-    find "$BACKUP_DIR" -maxdepth 1 -type f \
-        -name 'notes-db-*.dump' \
-        -printf '%f\n' |
+RETENTION_TEMP_FILE="$(mktemp "${BACKUP_DIR}/.retention-list.XXXXXX.tmp")"
+
+if ! find "$BACKUP_DIR" -maxdepth 1 -type f \
+    -name 'notes-db-*.dump' \
+    -printf '%f\n' |
     sort -r |
-    tail -n +8
-)
+    tail -n "+$((RETENTION_COUNT + 1))" > "$RETENTION_TEMP_FILE"; then
+    log "ERROR: Could not calculate backup retention list."
+    exit 1
+fi
+
+mapfile -t OLD_BACKUPS < "$RETENTION_TEMP_FILE"
+rm -- "$RETENTION_TEMP_FILE"
+RETENTION_TEMP_FILE=""
 
 for BACKUP in "${OLD_BACKUPS[@]}"; do
     if rm -- "${BACKUP_DIR}/${BACKUP}"; then
