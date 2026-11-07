@@ -6,7 +6,7 @@ This lab focuses on identifying known vulnerabilities in a Docker image using Tr
 
 The target is a Flask-based notes application running with PostgreSQL through Docker Compose on a self-hosted Ubuntu Server.
 
-The lab covers vulnerability assessment, machine-readable reporting, container hardening, application verification, and remediation planning.
+The lab covers vulnerability assessment, machine-readable reporting, container hardening, application verification, CI integration, and remediation planning.
 
 ### Objectives
 
@@ -16,6 +16,7 @@ The lab covers vulnerability assessment, machine-readable reporting, container h
 - Generate and inspect a JSON vulnerability report.
 - Apply Docker runtime security controls.
 - Verify the effective security configuration of the running container.
+- Integrate vulnerability scanning into the CI workflow.
 - Document findings, limitations, and future remediation steps.
 
 ## Environment
@@ -25,19 +26,18 @@ The lab covers vulnerability assessment, machine-readable reporting, container h
 | Host OS | Ubuntu Server 24.04.5 LTS |
 | Container runtime | Docker |
 | Orchestration | Docker Compose |
-| Vulnerability scanner | Trivy 0.76.0 |
+| Historical local scanner | Trivy 0.76.0 |
+| CI scanner | Trivy 0.70.0 |
 | Application | Flask notes application |
-| Application image | `notes-app:3` |
-| Base OS identified by Trivy | Debian 13.7 |
+| Historical scanned image | `notes-app:3` |
+| Base OS identified by historical scan | Debian 13.7 |
 | Database | PostgreSQL 16 |
 | Application port | `127.0.0.1:5000` |
 | Historical JSON report | `trivy-final.json` |
 
-The historical JSON report is stored on the homelab server at:
+The historical JSON report is stored locally on the homelab server and is not committed to this GitHub repository.
 
-`trivy-final.json` in the application directory on the homelab server
-
-The report is not stored in this GitHub repository.
+**Version distinction:** Trivy 0.76.0 was used for the historical local scan. The CI workflow uses Trivy 0.70.0 for scanning images built by the pipeline. These are separate scanning contexts and should not be treated as the same scan or report.
 
 ## 1. Vulnerability Scanning with Trivy
 
@@ -143,7 +143,7 @@ Further investigation against current Debian security advisories and package rep
 
 The following commands are intended to run on the homelab server, where the historical report is stored.
 
-Change to the application directory:
+Change to the application directory containing the report:
 
 ```bash
 cd /path/to/notes-app  # Replace with your application directory
@@ -381,7 +381,32 @@ The application health endpoint, API behavior, and data persistence were verifie
 
 These application checks complement the runtime inspection: one checks application behavior, while the other checks selected container configuration settings.
 
-## 7. Understanding the Security Results
+## 7. Trivy Integration in CI/CD
+
+Trivy is now integrated into the GitHub Actions CI workflow for the Docker image built by the pipeline.
+
+The CI scanning process:
+
+1. Builds the application image.
+2. Uses Trivy 0.70.0 to scan the built image.
+3. Configures the scan to evaluate HIGH and CRITICAL findings.
+4. Ignores unfixed vulnerabilities according to the workflow's scan configuration.
+5. Prevents the image publishing step from proceeding when the configured scan fails.
+6. Publishes the SHA-tagged image only after the required CI checks and scan succeed.
+
+The Trivy binary archive checksum is verified as part of the CI setup.
+
+This integration makes image scanning part of the automated build process rather than relying only on manual local scans.
+
+**Verification:** The image-changing CI/CD workflow completed successfully, including the Trivy scan and subsequent Docker Hub publishing. This verifies the configured pipeline path for that run; it does not establish that every future image will be vulnerability-free.
+
+### Scanner Version Distinction
+
+The historical local scan used Trivy 0.76.0, while the CI workflow uses Trivy 0.70.0.
+
+The historical report and CI scan have different image/build contexts and scanner versions. Their findings should not be compared as if they were generated from the same image with identical scanning conditions.
+
+## 8. Understanding the Security Results
 
 ### Image Vulnerability Scanning
 
@@ -409,7 +434,7 @@ Similarly, rebuilding an image with updated packages does not automatically guar
 
 A more complete workflow combines image scanning, package remediation, image rebuilding, runtime hardening, and post-change functional verification.
 
-## 8. Limitations and Future Remediation
+## 9. Limitations and Future Remediation
 
 The saved scan is historical. Its results should not be treated as a current assessment of a newly rebuilt image.
 
@@ -422,8 +447,7 @@ The following activities remain future work:
 5. Scan the rebuilt image using an updated vulnerability database.
 6. Compare the new findings with the historical report.
 7. Test application functionality and database persistence after rebuilding.
-8. Consider integrating Trivy into the CI/CD pipeline.
-9. Define a vulnerability policy for failing builds when specified severity thresholds are exceeded.
+8. Review the CI vulnerability threshold and exception policy periodically.
 
 The historical report should be retained as evidence of the October 17 scan. Any subsequent scan should be saved separately so the results can be compared over time.
 
@@ -437,6 +461,7 @@ No post-remediation scan is claimed in this lab documentation.
 - Runtime hardening and image vulnerability remediation are separate activities.
 - Docker inspection can verify selected runtime configuration settings.
 - Application health checks and API tests help confirm that security changes have not broken the application.
+- Integrating Trivy into CI makes image scanning part of the automated build and publishing process.
 - Rebuilding and rescanning are necessary to assess whether package remediation reduced the reported findings.
 
 ## Lab Status
@@ -448,12 +473,13 @@ No post-remediation scan is claimed in this lab documentation.
 - [x] Apply Docker runtime hardening controls.
 - [x] Verify runtime security settings using Docker inspection.
 - [x] Verify application health, API behavior, and persistence after hardening.
+- [x] Integrate Trivy image scanning into the CI workflow.
+- [x] Verify Trivy scanning in a successful image-changing CI/CD run.
 - [ ] Investigate current vendor fixes for the reported CVEs.
 - [ ] Rebuild the image after appropriate package updates.
 - [ ] Perform and document a separate post-remediation scan.
-- [ ] Integrate image scanning into CI/CD.
 
 ---
 
 **Environment:** Self-hosted Ubuntu Server homelab  
-**Focus:** Container security, vulnerability assessment, runtime hardening, and verification
+**Focus:** Container security, vulnerability assessment, runtime hardening, CI integration, and verification
