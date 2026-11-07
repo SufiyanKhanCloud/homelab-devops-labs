@@ -49,12 +49,12 @@ flowchart TD
 
     Prom -->|"Scrapes host metrics"| Node
     Grafana -->|"Queries metrics"| Prom
-    Prom -->|"Firing alerts"| AM
+    Prom -->|"Firing and resolved alerts"| AM
 ```
 
 Node Exporter exposes host-level metrics through its `/metrics` endpoint. Prometheus periodically scrapes this endpoint and stores the collected metrics.
 
-Grafana queries Prometheus using PromQL to retrieve and visualize metrics in dashboards. Prometheus also evaluates alert rules and forwards firing alerts to Alertmanager for notification handling.
+Grafana queries Prometheus using PromQL to retrieve and visualize metrics in dashboards. Prometheus also evaluates alert rules and forwards alert state changes to Alertmanager for notification handling.
 
 ### CI/CD Deployment Flow
 
@@ -111,7 +111,7 @@ flowchart TD
 
 CI and CD are maintained as separate GitHub Actions workflows. CI performs applicable validation and conditionally builds and publishes the application image. For pushes to `main`, it also generates a deployment manifest. CD validates that manifest and checks commit freshness before deciding whether deployment should proceed.
 
-A deployment is not requested for documentation-only or workflow-only changes that do not require a new application image.
+A deployment is not requested for changes that do not require a new application image.
 
 ## Technology Stack
 
@@ -142,10 +142,10 @@ A deployment is not requested for documentation-only or workflow-only changes th
 | Tailscale Remote Access | Connectivity, SSH, MagicDNS, startup, and reboot verification completed |
 | Docker Networking | Implemented and documented |
 | PostgreSQL Backup and Restore | Custom-format backups, isolated restoration, data comparison, and sequence verification completed |
-| Docker Compose | Application migration, health checks, runtime security controls, and persistence verification completed |
-| Trivy Container Security | Historical image scanning and runtime hardening completed; vulnerability remediation and rescan pending |
+| Docker Compose | Application migration, health checks, runtime security controls, and end-to-end image-changing CI/CD deployment verified |
+| Trivy Container Security | Historical image scanning and runtime hardening completed; vulnerability remediation and post-remediation scan pending |
 | Monitoring | Prometheus, Node Exporter, Grafana, Alertmanager, dashboard, and alert testing completed |
-| CI/CD | Separate CI/CD workflows, conditional validation, deployment manifest, stale-commit checks, and restricted deployment implementation completed; full image-change deployment verification pending |
+| CI/CD | Separate CI/CD workflows, conditional validation, image publishing, deployment manifest, stale-commit checks, restricted deployment, and controlled rollback testing completed |
 
 See [ROADMAP.md](ROADMAP.md) for detailed implementation and verification status.
 
@@ -185,7 +185,7 @@ Docker Hub publishing occurs only when all relevant image-building and scanning 
 
 Pull requests and non-main pushes can run applicable validation, but do not publish production images or request homelab deployment.
 
-**Documentation handling:** changes to the Lab 05 README can trigger the CI workflow because the file is within its configured path. The change classifier skips unrelated validation and image-building jobs. Root-level README and roadmap changes alone do not match the configured CI paths.
+**Documentation handling:** Changes to the Lab 05 README can trigger CI because the file is within its configured path. The change classifier skips unrelated validation and image-building jobs. Root-level README and roadmap changes alone do not match the configured CI paths.
 
 ### Deployment Manifest and CD
 
@@ -240,48 +240,37 @@ The server-side deployment helper:
 
 The application is updated without explicitly recreating the PostgreSQL service or deleting its persistent storage.
 
-### Deployment Verification Status
+### Deployment Verification
 
-The earlier deployment implementation was successfully used to deploy a SHA-tagged image to the homelab. The application and database were verified during that earlier deployment process.
+The hardened workflow has successfully completed an image-changing CI/CD run triggered by a dependency lockfile update.
 
-The latest CI/CD workflow-hardening changes were committed as:
+The verified process included:
 
-```text
-fc57e19 ci: harden CI and CD workflows
-```
+- Application tests and dependency lock-file validation.
+- Docker image build.
+- Trivy installation and checksum verification.
+- Vulnerability scanning of the built image.
+- Docker Hub publishing.
+- Deployment manifest generation and validation.
+- CD freshness checks.
+- Tailscale connectivity and restricted SSH deployment.
+- Deployment of the exact SHA-tagged image produced by CI.
+- Post-deployment application health and readiness checks.
 
-The workflow-only CI run completed successfully. The image-related jobs were skipped, as expected, because the changes did not affect application image inputs. The CD workflow consumed the deployment decision and skipped deployment because the manifest indicated that no deployment was required.
+Both CI and CD completed successfully.
 
-The following checks have also been completed:
+The deployed application returned:
 
-- Static workflow validation using `actionlint`.
-- Git whitespace validation using `git diff --check`.
-- Successful execution of the workflow-only CI path.
-- Deployment manifest generation and the no-deployment decision path.
+| Endpoint | Result |
+|---|---|
+| `/health` | HTTP 200 — `{"status":"ok"}` |
+| `/ready` | HTTP 200 — `{"status":"ready"}` |
 
-**The following end-to-end path remains to be verified with an image-relevant change:**
+The deployed image reference was checked against the expected SHA-tagged image. The application and PostgreSQL containers were also reported healthy.
 
-- Conditional application tests and dependency lock validation.
-- Docker image build and Trivy scan.
-- Docker Hub publication.
-- Deployment manifest requesting deployment.
-- CD execution through Tailscale and restricted SSH.
-- Server-side deployment helper execution.
-- Verification of the expected running image and database-aware readiness.
-- Controlled rollback testing.
+A controlled rollback test was performed using a deliberately triggered health-verification failure. The rollback path was exercised to verify recovery behavior.
 
-The deployment helper contains rollback logic, but a controlled rollback test is not currently claimed as verified.
-
-### Health and Readiness
-
-The application exposes two distinct endpoints:
-
-- `/health` — checks whether the API is responding.
-- `/ready` — checks application readiness, including database connectivity.
-
-The readiness endpoint returns an unsuccessful response when the application cannot establish the required database connection.
-
-Unit tests use mocked database connections. They verify application behavior but do not replace integration testing against a running PostgreSQL instance.
+**Verification distinction:** The successful image-changing run was triggered by a dependency lockfile change, not a direct `app.py` change. It nevertheless exercised the complete image build, scan, publish, and remote deployment path.
 
 See [Lab 05: Docker Compose](labs/05-docker-compose/README.md) for implementation and verification details.
 
@@ -310,6 +299,10 @@ The current backup automation uses:
 - A daily success marker to avoid duplicate successful backups on the same day.
 
 The service runs after server startup with a five-minute delay. It is not a guaranteed daily scheduler if the server remains online for multiple days.
+
+The latest verified backup archive was created on November 7, 2026. Its custom-format archive listing was validated successfully using `pg_restore --list`.
+
+Seven archives were retained at the time of inspection. This should not be interpreted as seven consecutive daily backups.
 
 Separate isolated restore tests verified restored data and sequence state using historical backups. A later restore test also confirmed recovered row counts without modifying the running application database.
 
@@ -346,7 +339,10 @@ Verification includes:
 
 The configured CPU alert triggers when average CPU usage exceeds 80% for five minutes.
 
-A notification was received for a Prometheus target-down alert.
+A controlled Node Exporter-down test verified both notification stages:
+
+- A firing notification was received when the monitoring target became unavailable.
+- A recovery notification was received after the target became available again.
 
 **Verification distinction:** CPU alert lifecycle testing and target-down notification testing were separate tests. Successful notification delivery for the CPU alert itself is not claimed.
 
@@ -367,6 +363,8 @@ A historical scan of the `notes-app:3` image on October 17, 2026, reported:
 - No HIGH or CRITICAL Python dependency findings.
 
 These results describe that specific historical image scan, not necessarily the current image.
+
+Trivy scanning is also integrated into the Lab 05 CI workflow. Changed application images are scanned before Docker Hub publishing.
 
 Runtime hardening includes:
 
@@ -409,14 +407,13 @@ The project follows an evidence-based approach:
 - Investigate Wi-Fi latency using measured evidence.
 - Investigate and remediate reported container image vulnerabilities.
 - Rebuild the application image and perform a post-remediation Trivy scan.
-- Exercise the full image-change CI/CD path.
-- Verify the new workflow's remote deployment path.
-- Test deployment rollback under controlled failure scenarios.
-- Expand monitoring coverage for application and PostgreSQL services.
+- Verify a direct application-code change through the full CI/CD pipeline.
 - Test CPU alert notification delivery independently.
 - Evaluate off-host PostgreSQL backup storage.
 - Improve backup failure notification and recovery handling.
 - Expand integration testing against a real PostgreSQL instance.
+- Consider stronger server-side protection against stale deployments.
+- Review third-party GitHub Actions pinning and supply-chain security.
 
 ## Security
 
