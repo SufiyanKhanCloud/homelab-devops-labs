@@ -8,7 +8,9 @@ The current implementation uses a root-owned Bash script, Docker, PostgreSQL uti
 
 A successful backup is recorded against the server's local calendar date. This prevents duplicate successful backups on the same day.
 
-The systemd service is enabled for startup-triggered execution. It waits five minutes after the service is triggered before running the backup script. The previous daily 2 AM timer is disabled, so this configuration does not guarantee a new backup every day while the server remains online.
+The systemd oneshot service is enabled for startup-triggered execution. It waits five minutes after the service is triggered before running the backup script.
+
+The previous daily systemd timer is disabled. Consequently, this configuration does not guarantee a new backup every day while the server remains online.
 
 ## Environment
 
@@ -20,14 +22,12 @@ The systemd service is enabled for startup-triggered execution. It waits five mi
 | Database name | `postgres` |
 | Database user | `postgres` |
 | Backup format | PostgreSQL custom archive (`pg_dump -Fc`) |
-| Backup directory | Host-local backup directory |
-| Backup script on server | `/usr/local/sbin/postgres-backup` |
-| Script owner and permissions | `root:root`, `0700` |
-| systemd service | `postgres-backup.service` |
-| Automation | systemd oneshot service |
+| Backup storage | Host-local backup directory |
+| Deployed script ownership and permissions | `root:root`, `0700` |
+| Automation | Root-owned systemd oneshot service |
 | Retention policy | Seven newest matching dump files |
 
-Runtime container identifiers and absolute filesystem paths are intentionally omitted from this public documentation.
+Runtime container identifiers, private network details, and absolute server filesystem paths are intentionally omitted from this public documentation.
 
 ## Repository Files
 
@@ -35,9 +35,9 @@ Runtime container identifiers and absolute filesystem paths are intentionally om
 - Docker Compose lab: [`labs/05-docker-compose/README.md`](../labs/05-docker-compose/README.md)
 - Backup and restore lab: [`labs/04-postgresql-backup-restore/README.md`](../labs/04-postgresql-backup-restore/README.md)
 
-**Implementation distinction:** The script stored in the repository is a lab/reference script. The currently deployed server implementation uses a separately installed root-owned backup script. Do not assume the repository script is identical to the deployed script.
+**Implementation distinction:** The script stored in the repository is a lab/reference script. The currently deployed server implementation uses a separately installed root-owned backup script. Do not assume the repository script is identical to the deployed implementation.
 
-The server script and its configuration must be reviewed and adapted before use on another machine.
+The deployed script and its configuration must be reviewed and adapted before use on another machine.
 
 ## Backup Workflow
 
@@ -80,7 +80,7 @@ Backup filenames use the following format:
 
 Example:
 
-`notes-db-2026-11-06-162336.dump`
+`notes-db-2026-11-07-123350.dump`
 
 The date and time in the filename are based on the server's local clock when the script initializes.
 
@@ -100,12 +100,12 @@ This restricts default permissions for newly created files and directories to th
 |---|---|
 | Backup directory | `root:root`, `0700` |
 | Completed backup archives | `root:root`, `0600` |
-| Backup script on the server | `root:root`, `0700` |
+| Deployed backup script | `root:root`, `0700` |
 | systemd service user | `root` |
 | systemd service group | `root` |
 | systemd service umask | `0077` |
-| `.backup.lock` | Runtime file used for process locking |
-| `.last-successful-backup-date` | Records the last successful backup date |
+| Lock file | Runtime file used for process locking |
+| Success-state file | Records the last successful backup date |
 | Temporary backup file | Created inside the backup directory and removed on exit if it remains |
 | Temporary state file | Used when recording successful completion |
 
@@ -115,43 +115,29 @@ Database dumps, credentials, private keys, and temporary environment files must 
 
 ## systemd Service
 
-The service unit is installed on the homelab server at:
+The backup automation uses a root-owned systemd oneshot service.
 
-`/etc/systemd/system/postgres-backup.service`
+Its verified configuration includes:
 
-The service is named:
-
-`postgres-backup.service`
-
-Its verified configuration is:
-
-```ini
-[Unit]
-Description=Homelab PostgreSQL Backup (Root)
-Requires=docker.service
-After=docker.service
-
-[Service]
-Type=oneshot
-User=root
-Group=root
-UMask=0077
-TimeoutStartSec=15min
-ExecStartPre=/bin/sleep 300
-ExecStart=/usr/local/sbin/postgres-backup
-
-[Install]
-WantedBy=multi-user.target
-```
+| Setting | Behavior |
+|---|---|
+| Service type | `oneshot` |
+| Execution user | `root` |
+| Execution group | `root` |
+| Service umask | `0077` |
+| Docker dependency | Requires Docker and runs after Docker starts |
+| Pre-start delay | 300 seconds (five minutes) |
+| Service start timeout | 15 minutes |
+| Startup integration | Enabled through `multi-user.target` |
 
 The service:
 
 - Requires Docker and runs after Docker starts.
 - Executes the backup script as `root`.
 - Applies a restrictive service umask of `0077`.
-- Waits 300 seconds (five minutes) before executing the backup script.
+- Waits five minutes before executing the backup script.
 - Has a 15-minute service start timeout.
-- Is enabled for startup through `multi-user.target`.
+- Is enabled for startup execution.
 
 The service uses oneshot execution. It runs its configured operation and exits rather than remaining active as a continuously running application.
 
@@ -159,11 +145,7 @@ After a successful execution, systemd may show the service as `inactive (dead)`.
 
 ### Startup Delay and Readiness Checks
 
-The service includes a five-minute pre-start delay through:
-
-```ini
-ExecStartPre=/bin/sleep 300
-```
+The service includes a five-minute pre-start delay.
 
 After this delay, the backup script performs its own PostgreSQL readiness checks.
 
@@ -206,12 +188,13 @@ The following implementation and operational checks have been performed:
 - [x] Verification that the service skipped duplicate backups when a successful backup was already recorded for that day.
 - [x] Inspection of backup directory ownership and permissions.
 - [x] Inspection of retained backup archives and systemd journal entries.
+- [x] Validation of the November 7, 2026 backup archive using `pg_restore --list`.
 
 ### Observed Backup Evidence
 
-The backup directory was inspected on 6 November 2026.
+The backup directory was inspected on November 7, 2026.
 
-The following seven archives were retained at that time:
+The following seven archives were retained at the time of inspection:
 
 | Backup archive | Size |
 |---|---:|
@@ -221,15 +204,15 @@ The following seven archives were retained at that time:
 | `notes-db-2026-11-03-125032.dump` | 2,599 bytes |
 | `notes-db-2026-11-04-125923.dump` | 2,599 bytes |
 | `notes-db-2026-11-05-125029.dump` | 2,599 bytes |
-| `notes-db-2026-11-06-162336.dump` | 2,599 bytes |
+| `notes-db-2026-11-07-123350.dump` | 2,599 bytes |
 
-The success-state file contained:
+The latest archive was successfully inspected using `pg_restore --list`.
 
-`2026-11-06`
+Systemd journal entries had previously confirmed successful backup executions on November 4, 5, and 6, 2026. Additional invocations on November 4 correctly skipped execution when the successful backup date was already recorded.
 
-Systemd journal entries confirmed successful backup executions on 4, 5, and 6 November 2026. Additional invocations on 4 November correctly skipped execution when the successful backup date was already recorded.
+The seven retained files are the seven newest matching archives at the time of inspection. They should not be interpreted as seven consecutive daily backups: two retained archives are from November 1, and no November 6 archive appears in this inspected set.
 
-The seven retained files are the seven newest matching archives at the time of inspection. They should not be interpreted as seven consecutive daily backups: two retained archives are from 1 November.
+The November 7 archive's successful listing validation establishes that its archive structure could be read. It does not establish that this particular archive has been restored successfully.
 
 These observations establish evidence for the inspected configuration and test runs. They do not guarantee that every future execution will succeed.
 
@@ -258,7 +241,7 @@ The test used the backup archive:
 
 `notes-db-2026-10-28-132725.dump`
 
-The archive was restored into a separate PostgreSQL 16 container named `postgres-restore-test`, using the database `restore_test` and a dedicated Docker volume.
+The archive was restored into a separate PostgreSQL 16 container, using an isolated database and a dedicated Docker volume.
 
 The restore completed without reported errors. The restored `public.notes` table contained two records, and the original `public.notes` table also contained two records.
 
