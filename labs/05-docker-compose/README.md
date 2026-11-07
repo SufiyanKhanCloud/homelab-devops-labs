@@ -4,24 +4,50 @@
 
 Migrate a manually managed Flask and PostgreSQL application into a Docker Compose environment while preserving existing database data.
 
-This lab covers container orchestration, service communication, persistent storage, health checks, runtime security, automated testing, Docker image publishing, and remote deployment.
+This lab covers container orchestration, service communication, persistent storage, health checks, runtime security, automated testing, Docker image publishing, CI/CD automation, and restricted remote deployment.
 
 ## Architecture
 
 ```mermaid
 flowchart TD
-    A[GitHub Repository] --> B[GitHub Actions CI]
-    B --> C[Automated Tests]
-    C --> D[Docker Image Build]
-    D --> E[Docker Hub: SHA-tagged Image]
-    E --> F[GitHub Actions CD]
-    F --> G[Tailscale Network]
-    G --> H[Restricted SSH Deployment]
-    H --> I[Root-controlled Deployment Helper]
-    I --> J[Docker Compose]
-    J --> K[Flask Notes API]
-    K --> L[(PostgreSQL 16)]
+    A["Push / Pull Request / Manual Run"] --> B["CI: Change Detection"]
+    B --> C["Conditional Validation"]
+
+    C --> D{"Image Inputs Changed?"}
+
+    D -->|Yes| E["Build Docker Image"]
+    E --> F["Trivy Vulnerability Scan"]
+    F --> G{"Push to main?"}
+    G -->|Yes| H["Publish SHA-tagged Image"]
+    G -->|No| I["CI Complete"]
+
+    D -->|No| J{"Push to main?"}
+    J -->|No| I
+    J -->|Yes| K["Create Manifest: Deployment Not Required"]
+
+    H --> L["Create Manifest: Deployment Required"]
+    K --> M["Upload Manifest Artifact"]
+    L --> M
+
+    M --> N["CD: workflow_run"]
+    N --> O["Validate Deployment Manifest"]
+    O --> P{"Deployment Required?"}
+
+    P -->|No| Q["Skip Deployment"]
+    P -->|Yes| R["Check Commit Freshness"]
+    R --> S{"Still Current?"}
+
+    S -->|No| Q
+    S -->|Yes| T["GitHub Environment"]
+    T --> U["Tailscale Connectivity"]
+    U --> V["Restricted SSH"]
+    V --> W["Root-controlled Deployment Helper"]
+    W --> X["Docker Compose"]
+    X --> Y["Flask Notes API"]
+    Y --> Z[("PostgreSQL 16")]
 ```
+
+The manifest is generated for pushes to `main`. Pull requests and manual runs can execute applicable CI validation but do not generate a production deployment request.
 
 ### Application Stack
 
@@ -32,7 +58,7 @@ flowchart TD
 | Python | 3.12 |
 | Database | PostgreSQL 16 |
 | Container orchestration | Docker Compose |
-| Application image | Public Docker Hub image |
+| Application image | Docker Hub image |
 | Application port | `127.0.0.1:5000` |
 | Database storage | External Docker volume |
 | Docker network | External Docker network |
@@ -159,6 +185,8 @@ The application container uses several runtime security controls.
 
 The Dockerfile creates a dedicated non-root application user and starts Gunicorn with two workers.
 
+The image also removes the pip package manager after installing the application dependencies.
+
 These controls reduce container privileges and restrict unnecessary writable access.
 
 They are defense-in-depth measures, not a replacement for application security, image scanning, or host-level security.
@@ -171,26 +199,39 @@ The application and database use separate health checks.
 
 Docker Compose uses `pg_isready` to determine whether PostgreSQL is accepting connections.
 
-### Application health check
+### Application health and readiness endpoints
 
 The Flask application exposes two relevant endpoints:
 
 | Endpoint | Purpose |
 |---|---|
-| `/health` | Checks whether the API is responding |
+| `/health` | Checks whether the API process is responding |
 | `/ready` | Checks application readiness, including database connectivity |
 
-The image-level health check uses the application health endpoint.
+The `/health` endpoint confirms that the Flask application can respond to a request.
 
-The deployment process uses the readiness endpoint to verify that the application can serve requests with its database dependency available.
+The `/ready` endpoint attempts a database connection and executes:
+
+```sql
+SELECT 1;
+```
+
+It returns:
+
+- HTTP 200 when the database check succeeds.
+- HTTP 503 when the database is unavailable.
+
+The Docker image health check uses `/ready`, so container health reflects both application availability and database connectivity.
 
 This distinction is important: an API process can respond to a health request while its database connection is unavailable.
 
+The unit tests cover both readiness outcomes using mocked database connections. They verify application behavior but do not replace an integration test against a live PostgreSQL instance.
+
 ## 5. Automated Testing
 
-GitHub Actions runs the application's pytest suite using Python 3.12.
+The project includes a pytest suite for the Flask application.
 
-The workflow executes:
+The test command is:
 
 ```bash
 python -m pytest --cov=app --cov-report=term-missing -v test_app.py
@@ -199,6 +240,8 @@ python -m pytest --cov=app --cov-report=term-missing -v test_app.py
 The tests cover application behavior, including:
 
 - Health and readiness endpoints.
+- Successful database readiness checks.
+- Database-unavailable readiness responses.
 - Retrieving notes.
 - Inserting notes.
 - Database error handling.
@@ -212,113 +255,355 @@ A separate integration-test layer against a real PostgreSQL instance remains a p
 
 ## 6. CI/CD Pipeline
 
-CI and CD are maintained as separate GitHub Actions workflows.
-
-### Continuous Integration
-
-Workflow:
+CI and CD are maintained as separate GitHub Actions workflows:
 
 ```text
 .github/workflows/ci.yml
-```
-
-The CI pipeline:
-
-1. Runs on relevant pushes and pull requests.
-2. Sets up Python 3.12.
-3. Installs development dependencies.
-4. Runs pytest with coverage.
-5. Builds the Docker image.
-6. Runs the configured container image security scan.
-7. Publishes the image to Docker Hub on pushes to `main`.
-
-Published images use a full commit SHA tag and a `latest` tag for the default branch.
-
-Pull requests and non-main pushes run validation without publishing or deploying the image.
-
-### Continuous Deployment
-
-Workflow:
-
-```text
 .github/workflows/cd.yml
 ```
 
-The CD workflow runs after successful CI on `main`.
+The workflows use change detection so that validation and image operations run only when their relevant inputs change.
 
-Its deployment process uses:
+### Continuous Integration
 
-1. A GitHub Actions runner.
-2. Tailscale connectivity to the homelab.
-3. SSH with strict host-key verification.
-4. A restricted deployment account.
-5. A server-side deployment wrapper and root-controlled helper.
-6. A SHA-tagged Docker image.
+The CI workflow is triggered by:
 
-The deployment account does not require membership in the Docker or sudo groups.
+- Pushes affecting `labs/05-docker-compose/**` or either CI/CD workflow file.
+- Pull requests affecting the same paths.
+- Manual runs through `workflow_dispatch`.
 
-Instead, SSH access is restricted to a specific deployment command. The server validates the requested image tag before invoking the root-controlled deployment helper.
+The workflow checks out the repository with full Git history and classifies changed files.
 
-### Remote deployment process
+It then sets conditional outputs to determine which validation and image operations are required.
 
-The server-side helper:
+### Change detection and conditional validation
 
-1. Validates the supplied SHA-tagged image identifier.
-2. Checks that the image belongs to the expected application repository.
-3. Pulls the requested image.
-4. Updates only the application service using:
+| Changed files | Conditional operation |
+|---|---|
+| `app.py`, `test_app.py`, or application dependency inputs | Run application tests |
+| Dependency input or lock files | Validate dependency lock files |
+| `compose.yaml` | Validate Docker Compose configuration |
+| `scripts/backup-postgres.sh` | Run Bash syntax validation |
+| `Dockerfile`, `app.py`, `requirements.txt`, or `.dockerignore` | Build and scan a new application image |
+
+The workflow performs the following checks:
+
+**1. Application tests**
+
+When application or dependency inputs change, CI:
+
+- Sets up Python 3.12.
+- Installs development dependencies.
+- Runs pytest with coverage reporting.
+
+**2. Dependency lock-file validation**
+
+When dependency inputs or lock files change, CI:
+
+- Creates an isolated Python virtual environment.
+- Installs `pip-tools==7.6.2`.
+- Regenerates production and development dependency lock files.
+- Uses hashes and the `--no-upgrade` option.
+- Compares the generated files against the committed lock files.
+
+The workflow fails if the committed lock files do not match the generated output.
+
+**3. Docker Compose validation**
+
+When `compose.yaml` changes, CI runs:
+
+```bash
+docker compose -f compose.yaml config --quiet
+```
+
+CI-only placeholder values are supplied for required environment variables. No actual application credentials are used.
+
+**4. Backup script validation**
+
+When the PostgreSQL backup script changes, CI runs:
+
+```bash
+bash -n labs/05-docker-compose/scripts/backup-postgres.sh
+```
+
+This checks Bash syntax without executing the backup operation.
+
+### Conditional Docker Image Build
+
+The application image is rebuilt only when an image-related input changes:
+
+- `Dockerfile`
+- `app.py`
+- `requirements.txt`
+- `.dockerignore`
+
+Docker Buildx is used to build the image from:
+
+```text
+labs/05-docker-compose
+```
+
+The build loads the image into the runner's Docker daemon so that the following vulnerability scan can inspect it.
+
+### Image Tagging
+
+The workflow generates:
+
+- A full Git commit SHA tag using the `sha-` prefix.
+- A `latest` tag for the default branch.
+
+The SHA tag provides an immutable reference to the source commit used to build the image.
+
+For example:
+
+```text
+sufiyankhan10/homelab-notes-api:sha-<full-commit-sha>
+```
+
+### Trivy Vulnerability Scanning
+
+When an image-related input changes, CI installs Trivy version `0.70.0`.
+
+The workflow downloads the release archive and its checksum file, verifies the archive using SHA-256, and installs the Trivy binary.
+
+The image scan checks:
+
+- Operating-system packages.
+- Application libraries.
+- CRITICAL vulnerabilities.
+- HIGH vulnerabilities.
+
+The scan is configured to ignore unfixed vulnerabilities and fail the workflow when matching findings are detected.
+
+The scan uses the locally built SHA-tagged image before publishing.
+
+### Docker Hub Publishing
+
+Publishing takes place only when:
+
+- An image-related input has changed.
+- The event is a push.
+- The target branch is `main`.
+- The image scan completes successfully.
+
+Docker Hub credentials are supplied through GitHub Actions secrets.
+
+Pull requests and non-main pushes can run applicable validation, build, and scan operations, but do not publish the image.
+
+### Deployment Manifest
+
+For every push to `main` that triggers CI, the workflow creates a JSON deployment manifest and uploads it as an artifact.
+
+The manifest records:
+
+| Field | Purpose |
+|---|---|
+| `schema_version` | Manifest format version |
+| `repository` | GitHub repository identity |
+| `commit_sha` | Exact source commit |
+| `deploy_required` | Whether an application deployment is required |
+| `image_ref` | Exact SHA-tagged image reference, or `null` |
+
+When an image-related input changes:
+
+- `deploy_required` is `true`.
+- `image_ref` contains the exact SHA-tagged image built by CI.
+
+When no image-related input changes:
+
+- `deploy_required` is `false`.
+- `image_ref` is `null`.
+
+This allows documentation-only or workflow-only changes to complete CI without requesting an application deployment.
+
+The manifest is associated with the exact CI run and commit. The CD workflow consumes it as data and does not execute files from the artifact.
+
+### Continuous Deployment
+
+The CD workflow is triggered when the CI workflow completes.
+
+It proceeds only when:
+
+- CI completed successfully.
+- The originating event was a push.
+- The originating branch was `main`.
+- The originating repository is the current repository.
+
+The preparation job downloads the manifest from the exact CI run and validates:
+
+- The manifest contains the expected keys.
+- The schema version is supported.
+- The repository matches the current repository.
+- The commit SHA matches the originating CI run.
+- The deployment flag is a Boolean.
+- The image reference matches the expected SHA-tagged image when deployment is required.
+- The image reference is `null` when deployment is not required.
+
+### Stale-Deployment Protection
+
+Before deployment, CD checks that the originating CI commit is still part of the current `main` history.
+
+It also checks whether newer image-relevant changes have been committed after that CI run.
+
+If a newer image-related change is found, the older deployment request is skipped.
+
+The deployment job repeats the freshness check immediately before connecting to the homelab. This reduces the chance of deploying an outdated application image.
+
+The deployment job also uses the `homelab-production` concurrency group with cancellation disabled, preventing production deployment jobs from cancelling one another.
+
+The final GitHub-side freshness check does not eliminate every possible race between the check and the remote deployment command. Server-side stale-deployment enforcement would provide an additional safeguard.
+
+### Restricted Homelab Deployment
+
+When deployment is required and the freshness checks pass, CD:
+
+1. Uses the `homelab-production` GitHub Environment.
+2. Validates the required deployment configuration.
+3. Establishes private connectivity through the Tailscale GitHub Action.
+4. Uses GitHub Actions identity federation for Tailscale authentication.
+5. Configures SSH using the deployment private key and known-hosts data stored as GitHub Actions secrets.
+6. Enforces strict host-key verification and non-interactive SSH options.
+7. Sends only the exact `sha-<40-character-commit>` identifier to the restricted deployment account.
+
+The deployment account does not require general Docker-group or sudo-group membership.
+
+Instead, SSH access is restricted to a specific deployment command. The server-side wrapper validates the requested SHA identifier before invoking the root-controlled deployment helper.
+
+### Remote Deployment Process
+
+The server-side deployment helper is responsible for:
+
+1. Validating the supplied SHA-tagged image identifier.
+2. Checking that the image belongs to the expected application repository.
+3. Pulling the requested image.
+4. Updating only the application service:
 
 ```bash
 docker compose up -d --no-deps app
 ```
 
-5. Waits for the expected image to run.
-6. Checks application readiness, including database connectivity.
-7. Reports success only after the required verification succeeds.
+5. Waiting for the expected image to run.
+6. Checking application readiness, including database connectivity.
+7. Reporting success only after the required verification succeeds.
 
-The deployment process also implements rollback.
+The deployment helper contains rollback handling. If deployment or post-deployment health verification fails, it attempts to restore the previous application image and verify the recovered application.
 
-If deployment or post-deployment health verification fails, the helper attempts to restore the previous application image and verifies the recovered application.
-
-The rollback mechanism was tested by deliberately triggering a health-verification failure. The previous image was restored and returned to a healthy state.
-
-This test validates the rollback mechanism; it does not represent a real application regression.
+A controlled rollback test has not been confirmed in the latest verification record, so the rollback implementation should not yet be treated as experimentally verified.
 
 The PostgreSQL service and its persistent volume are not explicitly recreated as part of an application-only deployment.
 
+### Workflow Validation Status
+
+The workflow files were checked locally using `actionlint` version `1.7.12`.
+
+Both workflow files passed without reported errors.
+
+The following static check also completed successfully:
+
+```bash
+git diff --check
+```
+
+The workflow-hardening change was committed as:
+
+```text
+fc57e19 ci: harden CI and CD workflows
+```
+
+The commit was pushed to `main`.
+
+The subsequent GitHub Actions run was a workflow-only change. CI completed successfully, while image-related operations were skipped because no Docker image input had changed.
+
+The CI workflow therefore did not exercise the application tests, dependency lock validation, Docker build, Trivy scan, or Docker Hub publishing in that run.
+
+The CD workflow's application deployment was also skipped because the manifest indicated that no application image deployment was required.
+
+This was the expected behavior for a workflow-only change.
+
+**Verification distinction:** The workflow-only/no-deployment path has been exercised. The complete image-changing build, scan, publish, and deployment path still requires end-to-end verification.
+
 ## 7. Deployment Verification
 
-The deployment was verified on the homelab server.
+### Previous Homelab Deployment
 
-### Application readiness
+The homelab application had previously been deployed using the earlier CI/CD implementation.
+
+Earlier deployment checks confirmed successful application deployment and access to the existing PostgreSQL-backed application data.
+
+The deployed application image was checked against its SHA-based image reference.
+
+These results document earlier deployment work. They should not be interpreted as an end-to-end verification of the newly hardened CI/CD workflow.
+
+### Application Readiness
+
+The current application provides two separate endpoints:
+
+```bash
+curl -i http://127.0.0.1:5000/health
+```
 
 ```bash
 curl -i http://127.0.0.1:5000/ready
 ```
 
-The readiness endpoint returned HTTP 200 during successful verification.
+The `/health` endpoint checks whether the API process is responding.
+
+The `/ready` endpoint checks database connectivity and returns HTTP 200 when ready or HTTP 503 when the database is unavailable.
 
 ### Notes API
+
+The Notes API can be checked using:
 
 ```bash
 curl -sS http://127.0.0.1:5000/notes
 ```
 
-The endpoint returned the expected application response, confirming that the API could retrieve records from PostgreSQL.
+Earlier verification confirmed that the API could retrieve records from PostgreSQL.
 
 Actual note contents and database identifiers are intentionally omitted from this public documentation.
 
-### Container status
+### Container Status
+
+Container status can be inspected using:
 
 ```bash
 docker compose ps
 ```
 
-Both application and PostgreSQL containers were reported healthy during verification.
+Both application and PostgreSQL containers were reported healthy during earlier deployment verification.
 
-The deployed application image was also checked against its full SHA-tagged image reference.
+The application health check uses `/ready`, so a healthy application container also indicates that its database readiness check is succeeding at the time of the check.
 
-Two automated deployments were previously verified. The subsequent deployment used a workflow-configuration-only commit, so a fresh application-code deployment remains a separate verification step.
+### Verification of the Hardened Workflow
+
+The workflow-hardening commit `fc57e19` was pushed to `main`.
+
+The resulting GitHub Actions behavior was:
+
+- CI completed successfully.
+- No image-related inputs had changed.
+- Docker build, Trivy scan, Docker Hub login, and image publishing were skipped.
+- CI generated a manifest indicating that deployment was not required.
+- CD did not run the application deployment job.
+
+This was an expected no-deployment run, not a failed deployment.
+
+### Pending End-to-End Verification
+
+The following operations still require a successful image-changing run through the new workflow:
+
+- Conditional application test execution.
+- Dependency lock-file regeneration and comparison.
+- Docker image build.
+- Trivy installation and vulnerability scanning in GitHub Actions.
+- Docker Hub publishing of the SHA-tagged image.
+- Manifest validation for a deployment-required request.
+- Tailscale connectivity from the CD runner.
+- Restricted SSH execution against the homelab.
+- Deployment of the exact image produced by CI.
+- Post-deployment application and database readiness checks.
+- Confirmation that existing PostgreSQL data remains intact.
+- Controlled testing of the server-side rollback mechanism.
 
 ## 8. Backup and Recovery
 
@@ -329,7 +614,9 @@ PostgreSQL backup automation and recovery are documented separately:
 
 The repository includes a configurable backup reference script:
 
-`scripts/backup-postgres.sh`
+```text
+scripts/backup-postgres.sh
+```
 
 It uses Docker Compose service discovery to locate the database container instead of relying on a hardcoded container name.
 
@@ -352,7 +639,9 @@ The reference script includes:
 
 **Deployment distinction:** The repository script is a lab/reference implementation. The deployed homelab backup uses a separately installed root-owned script managed by a systemd oneshot service. The repository script is not automatically deployed to the server.
 
-The deployed implementation uses a startup-triggered service with a five-minute delay, same-day duplicate prevention, and seven-file retention. It does not currently guarantee a recurring daily backup while the server remains online.
+The deployed implementation uses a startup-triggered service with a five-minute delay, same-day duplicate prevention, and seven-file retention.
+
+It does not currently guarantee a recurring daily backup while the server remains online.
 
 An isolated PostgreSQL restore test was also performed to verify that backup data could be recovered without modifying the running application database.
 
@@ -360,31 +649,47 @@ Archive validation and an actual restore test provide different levels of recove
 
 ## 9. Limitations and Next Steps
 
-The current implementation has some remaining improvement opportunities:
+The current implementation has the following remaining work:
 
+- Exercise the complete image-changing CI path using a meaningful application or image-input change.
+- Verify application tests and dependency lock-file validation when their respective inputs change.
+- Verify Docker Compose and backup-script validation when those files change.
+- Confirm that the Docker image builds successfully in GitHub Actions.
+- Confirm that Trivy installs, verifies its checksum, and scans the built image successfully.
+- Verify Docker Hub publishing for a successful image-changing push to `main`.
+- Exercise the deployment-required manifest and the new CD workflow against the homelab.
+- Verify the deployed image SHA, application readiness, database availability, and preservation of existing data.
+- Test the server-side rollback mechanism through a controlled failure scenario.
+- Consider pinning third-party GitHub Actions to verified full commit SHAs instead of relying only on version tags.
+- Consider stronger server-side protection against stale deployments to reduce the remaining race window between the final GitHub freshness check and remote deployment.
 - Add integration tests against a real PostgreSQL instance.
-- Verify deployment following a fresh application-code change.
-- Continue testing rollback under different failure scenarios.
-- Evaluate branch-protection behavior before making workflow checks required, because Markdown-only changes are excluded from workflow execution.
-- Consider off-host backup storage to improve resilience against server or disk failure.
+- Evaluate off-host backup storage to improve resilience against server or disk failure.
 - Expand recovery testing beyond basic archive validation and row-count checks.
 
 The environment is a personal homelab used for learning and engineering practice, not a production service.
 
 ## 10. Outcome
 
-This lab demonstrates a progression from manually managed application containers to a Docker Compose deployment with:
+This lab demonstrates the development and operation of a self-hosted Flask and PostgreSQL application environment using Docker Compose, with:
 
 - Persistent PostgreSQL storage.
 - Service discovery and health checks.
 - Container runtime hardening.
 - Automated Python testing.
-- Docker image building and publishing.
-- Tailscale-based remote access.
+- Change-aware GitHub Actions CI/CD workflows.
+- Conditional Docker image building and Trivy vulnerability scanning.
+- Full Git SHA-based image tagging and Docker Hub publishing.
+- Deployment manifests connecting CI and CD.
+- Stale-deployment checks before remote deployment.
+- Tailscale-based private connectivity.
 - Restricted SSH deployment.
 - Root-controlled deployment operations.
 - Application readiness verification.
-- Tested deployment rollback.
 - PostgreSQL backup and recovery practices.
+- Prometheus, Node Exporter, and Grafana monitoring.
 
-The implementation provides practical experience with container orchestration, application deployment, infrastructure security, and operational recovery.
+Earlier application deployments and data-preservation checks were verified. The latest workflow-only change also passed its GitHub Actions CI run, with deployment correctly skipped because no application image change was required.
+
+The complete image-changing path of the newly hardened CI/CD workflows—including image build, Trivy scan, publishing, and remote deployment—remains pending end-to-end verification. The deployment helper includes rollback handling, but a controlled rollback test is also pending confirmation.
+
+This project provides practical experience with Linux administration, containerization, CI/CD design, infrastructure security, monitoring, database reliability, and deployment operations in a personal homelab environment.
