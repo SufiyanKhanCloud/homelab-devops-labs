@@ -60,38 +60,58 @@ Grafana queries Prometheus using PromQL to retrieve and visualize metrics in das
 
 ```mermaid
 flowchart TD
-    Event["Push or Pull Request"]
+    Event["Push / Pull Request / Manual Run"]
     CI["GitHub Actions CI"]
-    Tests["Automated Tests and Coverage"]
-    Build["Docker Image Build and Scan"]
-    Main{"Push to main?"}
-    Publish["Publish SHA-tagged Image"]
-    CD["GitHub Actions CD"]
-    VPN["Tailscale Connectivity"]
-    SSH["Restricted SSH Deployment"]
+    Detect["Change Detection"]
+    Validate["Conditional Validation"]
+
+    Image{"Image Inputs Changed?"}
+    Build["Build Docker Image"]
+    Scan["Trivy Vulnerability Scan"]
+    Publish{"Push to main?"}
+    Registry["Publish SHA-tagged Image"]
+
+    Manifest["Generate Deployment Manifest"]
+    Artifact["Upload Manifest Artifact"]
+    CD["CD: workflow_run"]
+    Check["Validate Manifest and Commit Freshness"]
+    Required{"Deployment Required?"}
+
+    Tailscale["Tailscale Connectivity"]
+    SSH["Restricted SSH"]
     Helper["Root-controlled Deployment Helper"]
     Deploy["Update Application Service"]
     Ready["Database-aware Readiness Check"]
-    Rollback["Restore Previous Image if Verification Fails"]
 
     Event --> CI
-    CI --> Tests
-    Tests --> Build
-    Build --> Main
-    Main -->|No| End["CI Complete"]
-    Main -->|Yes| Publish
-    Publish --> CD
-    CD --> VPN
-    VPN --> SSH
+    CI --> Detect
+    Detect --> Validate
+    Validate --> Image
+
+    Image -->|Yes| Build
+    Build --> Scan
+    Scan --> Publish
+    Publish -->|Yes| Registry
+    Publish -->|No| Manifest
+    Registry --> Manifest
+
+    Image -->|No| Manifest
+    Manifest --> Artifact
+    Artifact --> CD
+    CD --> Check
+    Check --> Required
+
+    Required -->|No| Skip["Deployment Skipped"]
+    Required -->|Yes| Tailscale
+    Tailscale --> SSH
     SSH --> Helper
     Helper --> Deploy
     Deploy --> Ready
-    Ready -->|Success| Success["Deployment Complete"]
-    Ready -->|Failure| Rollback
-    Rollback --> Recovery["Verify Previous Application Image"]
 ```
 
-CI and CD are maintained as separate GitHub Actions workflows. CI validates the application and builds the image, while CD handles deployment after successful CI on the default branch.
+CI and CD are maintained as separate GitHub Actions workflows. CI performs applicable validation and conditionally builds and publishes the application image. For pushes to `main`, it also generates a deployment manifest. CD validates that manifest and checks commit freshness before deciding whether deployment should proceed.
+
+A deployment is not requested for documentation-only or workflow-only changes that do not require a new application image.
 
 ## Technology Stack
 
@@ -125,7 +145,7 @@ CI and CD are maintained as separate GitHub Actions workflows. CI validates the 
 | Docker Compose | Application migration, health checks, runtime security controls, and persistence verification completed |
 | Trivy Container Security | Historical image scanning and runtime hardening completed; vulnerability remediation and rescan pending |
 | Monitoring | Prometheus, Node Exporter, Grafana, Alertmanager, dashboard, and alert testing completed |
-| CI/CD | Automated deployment, readiness verification, restricted deployment access, and controlled rollback testing completed |
+| CI/CD | Separate CI/CD workflows, conditional validation, deployment manifest, stale-commit checks, and restricted deployment implementation completed; full image-change deployment verification pending |
 
 See [ROADMAP.md](ROADMAP.md) for detailed implementation and verification status.
 
@@ -140,37 +160,69 @@ The CI and CD workflows are maintained separately:
 
 ### Continuous Integration
 
-For applicable pushes and pull requests, GitHub Actions:
+The CI workflow supports pushes, pull requests, and manual execution. Its path filters cover:
 
-- Checks out the repository.
-- Sets up Python 3.12.
-- Installs development dependencies.
-- Runs pytest with coverage reporting.
-- Builds the application Docker image.
-- Runs the configured Trivy image scan.
-- Publishes the image to Docker Hub on pushes to `main`.
+- `labs/05-docker-compose/**`
+- `.github/workflows/ci.yml`
+- `.github/workflows/cd.yml`
 
-Published images receive a full Git commit SHA tag. The default branch also receives the `latest` tag.
+A change-detection job identifies which parts of the application or its supporting configuration have changed. Subsequent jobs run conditionally rather than executing every validation step for every change.
 
-Pull requests and non-main pushes run applicable validation without publishing or deploying the application image.
+Depending on the changed files, CI can perform:
 
-Markdown-only changes are excluded through workflow path filtering. Changes containing both documentation and relevant application files still trigger CI.
+- Python dependency lock-file validation using pip-tools.
+- Automated pytest execution with coverage reporting.
+- Docker Compose configuration validation.
+- Bash syntax validation for the PostgreSQL backup script.
+- Docker image building using Docker Buildx.
+- Trivy vulnerability scanning of the built image.
 
-The application tests cover health and readiness responses, notes retrieval, note insertion, database error handling, and environment-based database configuration.
+The image build uses a full Git commit SHA tag. On the default branch, the `latest` tag is also generated.
 
-Database connections are mocked in the unit tests. They do not replace integration testing against a running PostgreSQL instance.
+Trivy is configured to fail the image scan for reported HIGH and CRITICAL vulnerabilities. Unfixed vulnerabilities are excluded from the configured scan.
+
+Docker Hub publishing occurs only when all relevant image-building and scanning steps succeed, the event is a push, and the branch is `main`.
+
+Pull requests and non-main pushes can run applicable validation, but do not publish production images or request homelab deployment.
+
+**Documentation handling:** changes to the Lab 05 README can trigger the CI workflow because the file is within its configured path. The change classifier skips unrelated validation and image-building jobs. Root-level README and roadmap changes alone do not match the configured CI paths.
+
+### Deployment Manifest and CD
+
+For pushes to `main`, CI generates a JSON deployment manifest and uploads it as a workflow artifact.
+
+The manifest records:
+
+- Schema version.
+- Repository identity.
+- Full commit SHA.
+- Whether deployment is required.
+- Exact SHA-tagged image reference, when deployment is required.
+
+For changes that do not require a new application image, the manifest records that deployment is not required.
+
+The CD workflow starts after CI completes. Before deployment, it:
+
+1. Confirms that the CI workflow succeeded and was triggered by a push to `main` in the expected repository.
+2. Downloads the manifest associated with that CI run.
+3. Validates the manifest's structure, repository, commit SHA, deployment flag, and image reference.
+4. Checks whether the CI commit is still current relative to `main`.
+5. Skips deployment if a newer image-relevant change makes the requested deployment stale.
+6. Proceeds only when the manifest requests deployment and the freshness checks pass.
+
+A final freshness check runs immediately before the remote deployment steps. This reduces the chance of deploying an outdated image, although a race between the final GitHub check and the server-side command is still possible.
 
 ### Secure Deployment
 
-After successful CI on `main`, the CD workflow:
+When deployment is required, the CD workflow:
 
-1. Authenticates to Tailscale using GitHub Actions identity federation.
+1. Uses GitHub Actions identity federation to authenticate to Tailscale.
 2. Establishes private connectivity to the homelab server.
 3. Configures SSH with strict host-key verification.
 4. Uses a restricted deployment account.
-5. Invokes a server-side deployment wrapper.
-6. Updates the application using a root-controlled deployment helper.
-7. Verifies application readiness.
+5. Sends only the validated SHA-tagged deployment identifier.
+6. Invokes a server-side deployment wrapper.
+7. Uses a root-controlled deployment helper to update the application.
 
 The deployment account does not require membership in the Docker or sudo groups.
 
@@ -184,31 +236,54 @@ The server-side deployment helper:
 - Updates only the application service through Docker Compose.
 - Verifies that the expected image is running.
 - Checks the database-aware readiness endpoint.
-- Attempts to restore the previous image if deployment verification fails.
+- Contains rollback logic to attempt restoration of the previous image if deployment verification fails.
 
 The application is updated without explicitly recreating the PostgreSQL service or deleting its persistent storage.
 
-### Deployment Verification
+### Deployment Verification Status
 
-The automated deployment process has been successfully verified using SHA-tagged Docker images.
+The earlier deployment implementation was successfully used to deploy a SHA-tagged image to the homelab. The application and database were verified during that earlier deployment process.
 
-Verification includes:
+The latest CI/CD workflow-hardening changes were committed as:
 
-- Successful CI and CD workflow execution.
-- Private connectivity through Tailscale.
-- Restricted SSH deployment access.
-- Server-side image validation and deployment.
-- Application readiness verification.
-- Confirmation of the expected running image.
-- PostgreSQL remaining available during application-only updates.
+```text
+fc57e19 ci: harden CI and CD workflows
+```
 
-The deployment helper's rollback mechanism was also tested by deliberately triggering a health-verification failure. The previous application image was restored and its health verified.
+The workflow-only CI run completed successfully. The image-related jobs were skipped, as expected, because the changes did not affect application image inputs. The CD workflow consumed the deployment decision and skipped deployment because the manifest indicated that no deployment was required.
 
-This was a controlled rollback test, not a real application regression.
+The following checks have also been completed:
 
-The deployment readiness endpoint is `/ready`, which checks application readiness, including database connectivity.
+- Static workflow validation using `actionlint`.
+- Git whitespace validation using `git diff --check`.
+- Successful execution of the workflow-only CI path.
+- Deployment manifest generation and the no-deployment decision path.
 
-The `/health` endpoint serves a different purpose: it confirms that the API is responding but does not independently establish database availability.
+**The following end-to-end path remains to be verified with an image-relevant change:**
+
+- Conditional application tests and dependency lock validation.
+- Docker image build and Trivy scan.
+- Docker Hub publication.
+- Deployment manifest requesting deployment.
+- CD execution through Tailscale and restricted SSH.
+- Server-side deployment helper execution.
+- Verification of the expected running image and database-aware readiness.
+- Controlled rollback testing.
+
+The deployment helper contains rollback logic, but a controlled rollback test is not currently claimed as verified.
+
+### Health and Readiness
+
+The application exposes two distinct endpoints:
+
+- `/health` — checks whether the API is responding.
+- `/ready` — checks application readiness, including database connectivity.
+
+The readiness endpoint returns an unsuccessful response when the application cannot establish the required database connection.
+
+Unit tests use mocked database connections. They verify application behavior but do not replace integration testing against a running PostgreSQL instance.
+
+See [Lab 05: Docker Compose](labs/05-docker-compose/README.md) for implementation and verification details.
 
 ## PostgreSQL Backup and Restore
 
@@ -267,11 +342,11 @@ Verification includes:
 - Node Exporter Full dashboard verification.
 - CPU alert-rule validation.
 - Pending-to-firing alert-state testing through a controlled threshold simulation.
-- Alertmanager notification delivery testing.
+- Alertmanager target-down notification testing.
 
 The configured CPU alert triggers when average CPU usage exceeds 80% for five minutes.
 
-A notification was successfully received for a Prometheus target-down alert.
+A notification was received for a Prometheus target-down alert.
 
 **Verification distinction:** CPU alert lifecycle testing and target-down notification testing were separate tests. Successful notification delivery for the CPU alert itself is not claimed.
 
@@ -334,11 +409,13 @@ The project follows an evidence-based approach:
 - Investigate Wi-Fi latency using measured evidence.
 - Investigate and remediate reported container image vulnerabilities.
 - Rebuild the application image and perform a post-remediation Trivy scan.
+- Exercise the full image-change CI/CD path.
+- Verify the new workflow's remote deployment path.
+- Test deployment rollback under controlled failure scenarios.
 - Expand monitoring coverage for application and PostgreSQL services.
 - Test CPU alert notification delivery independently.
 - Evaluate off-host PostgreSQL backup storage.
 - Improve backup failure notification and recovery handling.
-- Continue testing deployment rollback under different failure scenarios.
 - Expand integration testing against a real PostgreSQL instance.
 
 ## Security
