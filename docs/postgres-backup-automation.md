@@ -179,7 +179,7 @@ The following implementation and operational checks have been performed:
 - [x] Confirmation that the service is enabled.
 - [x] Confirmation that the previous daily timer is disabled.
 - [x] Confirmation that Docker is active.
-- [x] Successful execution of the systemd backup service.
+- [x] Successful systemd service invocations.
 - [x] Successful creation and archive validation of PostgreSQL dumps.
 - [x] Verification of the recorded successful-backup date.
 - [x] Verification that a second invocation on the same day skips the backup.
@@ -208,7 +208,9 @@ The following seven archives were retained at the time of inspection:
 
 The latest archive was successfully inspected using `pg_restore --list`.
 
-Systemd journal entries had previously confirmed successful backup executions on November 4, 5, and 6, 2026. Additional invocations on November 4 correctly skipped execution when the successful backup date was already recorded.
+Systemd journal entries recorded successful service invocations on November 4, 5, and 6, 2026. A successful service invocation does not necessarily mean a new archive was created: the script can exit successfully after skipping a duplicate backup when the successful-backup date is already recorded.
+
+Additional invocations on November 4 correctly skipped backup creation when the successful backup date was already recorded.
 
 The seven retained files are the seven newest matching archives at the time of inspection. They should not be interpreted as seven consecutive daily backups: two retained archives are from November 1, and no November 6 archive appears in this inspected set.
 
