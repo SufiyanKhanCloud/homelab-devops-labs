@@ -38,7 +38,7 @@ flowchart TD
     R --> S{"Still Current?"}
 
     S -->|No| Q
-    S -->|Yes| T["GitHub Environment"]
+    S -->|Yes| T["Production GitHub Environment"]
     T --> U["Tailscale Connectivity"]
     U --> V["Restricted SSH"]
     V --> W["Root-controlled Deployment Helper"]
@@ -304,6 +304,7 @@ When dependency inputs or lock files change, CI:
 - Installs `pip-tools==7.6.2`.
 - Regenerates production and development dependency lock files.
 - Uses hashes and the `--no-upgrade` option.
+- Uses an explicit package index URL for consistent lock generation.
 - Compares the generated files against the committed lock files.
 
 The workflow fails if the committed lock files do not match the generated output.
@@ -357,7 +358,7 @@ The SHA tag provides an immutable reference to the source commit used to build t
 For example:
 
 ```text
-sufiyankhan10/homelab-notes-api:sha-<full-commit-sha>
+<dockerhub-namespace>/<image-name>:sha-<full-commit-sha>
 ```
 
 ### Trivy Vulnerability Scanning
@@ -449,7 +450,7 @@ If a newer image-related change is found, the older deployment request is skippe
 
 The deployment job repeats the freshness check immediately before connecting to the homelab. This reduces the chance of deploying an outdated application image.
 
-The deployment job also uses the `homelab-production` concurrency group with cancellation disabled, preventing production deployment jobs from cancelling one another.
+The deployment job also uses a production concurrency group with cancellation disabled, preventing production deployment jobs from cancelling one another.
 
 The final GitHub-side freshness check does not eliminate every possible race between the check and the remote deployment command. Server-side stale-deployment enforcement would provide an additional safeguard.
 
@@ -457,7 +458,7 @@ The final GitHub-side freshness check does not eliminate every possible race bet
 
 When deployment is required and the freshness checks pass, CD:
 
-1. Uses the `homelab-production` GitHub Environment.
+1. Uses a production GitHub Environment.
 2. Validates the required deployment configuration.
 3. Establishes private connectivity through the Tailscale GitHub Action.
 4. Uses GitHub Actions identity federation for Tailscale authentication.
@@ -488,7 +489,7 @@ docker compose up -d --no-deps app
 
 The deployment helper contains rollback handling. If deployment or post-deployment health verification fails, it attempts to restore the previous application image and verify the recovered application.
 
-A controlled rollback test has not been confirmed in the latest verification record, so the rollback implementation should not yet be treated as experimentally verified.
+A controlled rollback test was performed using a deliberately triggered health-verification failure. The rollback path was exercised to verify recovery behavior.
 
 The PostgreSQL service and its persistent volume are not explicitly recreated as part of an application-only deployment.
 
@@ -504,35 +505,57 @@ The following static check also completed successfully:
 git diff --check
 ```
 
-The workflow-hardening change was committed as:
+The workflow-hardening change was committed and pushed to `main`.
 
-```text
-fc57e19 ci: harden CI and CD workflows
-```
+The initial workflow-only run completed successfully. Because no Docker image inputs had changed, image-related operations and application deployment were correctly skipped.
 
-The commit was pushed to `main`.
+A subsequent dependency lockfile change exposed an inconsistency in the generated lock-file command headers. The lock generation process was corrected using `pip-tools==7.6.2` and an explicit package index URL. The generated command headers changed, while the dependency pins and hashes remained unchanged.
 
-The subsequent GitHub Actions run was a workflow-only change. CI completed successfully, while image-related operations were skipped because no Docker image input had changed.
+The corrected lock files passed CI validation.
 
-The CI workflow therefore did not exercise the application tests, dependency lock validation, Docker build, Trivy scan, or Docker Hub publishing in that run.
+### End-to-End CI/CD Verification
 
-The CD workflow's application deployment was also skipped because the manifest indicated that no application image deployment was required.
+A subsequent lockfile-triggered run exercised the complete image-changing CI/CD path.
 
-This was the expected behavior for a workflow-only change.
+The verified sequence included:
 
-**Verification distinction:** The workflow-only/no-deployment path has been exercised. The complete image-changing build, scan, publish, and deployment path still requires end-to-end verification.
+1. Application tests and dependency lock-file validation.
+2. Docker image build.
+3. Trivy installation and checksum verification.
+4. Vulnerability scanning of the locally built image.
+5. Docker Hub publishing after successful scanning.
+6. Deployment manifest generation and validation.
+7. CD freshness checks.
+8. Tailscale connectivity and restricted SSH deployment.
+9. Deployment of the exact SHA-tagged image produced by CI.
+10. Post-deployment application health and readiness checks.
+
+Both CI and CD completed successfully.
+
+The deployed application returned:
+
+| Endpoint | Result |
+|---|---|
+| `/health` | HTTP 200 — `{"status":"ok"}` |
+| `/ready` | HTTP 200 — `{"status":"ready"}` |
+
+The deployed image reference was checked against the expected SHA-tagged image. The application and PostgreSQL containers were also reported healthy.
+
+**Verification distinction:** This successful run was triggered by a dependency lockfile change, not a direct `app.py` change. It nevertheless exercised the complete image build, scan, publish, and remote deployment path.
+
+The separate controlled rollback test also verified the deployment helper's rollback behavior.
 
 ## 7. Deployment Verification
 
 ### Previous Homelab Deployment
 
-The homelab application had previously been deployed using the earlier CI/CD implementation.
+The homelab application had previously been deployed using an earlier CI/CD implementation.
 
 Earlier deployment checks confirmed successful application deployment and access to the existing PostgreSQL-backed application data.
 
 The deployed application image was checked against its SHA-based image reference.
 
-These results document earlier deployment work. They should not be interpreted as an end-to-end verification of the newly hardened CI/CD workflow.
+These results document earlier deployment work and provide historical context for the current implementation.
 
 ### Application Readiness
 
@@ -570,40 +593,35 @@ Container status can be inspected using:
 docker compose ps
 ```
 
-Both application and PostgreSQL containers were reported healthy during earlier deployment verification.
+Both application and PostgreSQL containers were reported healthy during the latest deployment verification.
 
 The application health check uses `/ready`, so a healthy application container also indicates that its database readiness check is succeeding at the time of the check.
 
-### Verification of the Hardened Workflow
+### Verification Summary
 
-The workflow-hardening commit `fc57e19` was pushed to `main`.
+The current verification evidence covers:
 
-The resulting GitHub Actions behavior was:
+| Area | Status |
+|---|---|
+| CI workflow validation | Verified |
+| CD workflow validation | Verified |
+| Dependency lock-file validation | Verified |
+| Application unit tests | Verified |
+| Docker image build | Verified |
+| Trivy installation and checksum validation | Verified |
+| Image vulnerability scan | Verified |
+| Docker Hub publishing | Verified |
+| Deployment manifest validation | Verified |
+| Stale-deployment checks | Exercised |
+| Tailscale connectivity | Verified |
+| Restricted SSH deployment | Verified |
+| Exact SHA-tagged image deployment | Verified |
+| Application health endpoint | HTTP 200 |
+| Application readiness endpoint | HTTP 200 |
+| Application and database container health | Verified |
+| Controlled rollback test | Verified |
 
-- CI completed successfully.
-- No image-related inputs had changed.
-- Docker build, Trivy scan, Docker Hub login, and image publishing were skipped.
-- CI generated a manifest indicating that deployment was not required.
-- CD did not run the application deployment job.
-
-This was an expected no-deployment run, not a failed deployment.
-
-### Pending End-to-End Verification
-
-The following operations still require a successful image-changing run through the new workflow:
-
-- Conditional application test execution.
-- Dependency lock-file regeneration and comparison.
-- Docker image build.
-- Trivy installation and vulnerability scanning in GitHub Actions.
-- Docker Hub publishing of the SHA-tagged image.
-- Manifest validation for a deployment-required request.
-- Tailscale connectivity from the CD runner.
-- Restricted SSH execution against the homelab.
-- Deployment of the exact image produced by CI.
-- Post-deployment application and database readiness checks.
-- Confirmation that existing PostgreSQL data remains intact.
-- Controlled testing of the server-side rollback mechanism.
+The successful image-changing run was triggered by a dependency lockfile update. A direct application-code change deployment is not claimed as part of that specific test.
 
 ## 8. Backup and Recovery
 
@@ -643,7 +661,11 @@ The deployed implementation uses a startup-triggered service with a five-minute 
 
 It does not currently guarantee a recurring daily backup while the server remains online.
 
-An isolated PostgreSQL restore test was also performed to verify that backup data could be recovered without modifying the running application database.
+The latest verified backup archive was created on November 7, 2026. Its custom-format archive listing was validated successfully using `pg_restore --list`.
+
+Seven archives were retained at the time of inspection. This should not be interpreted as seven consecutive daily backups.
+
+Separate isolated PostgreSQL restore tests were performed to verify that backup data could be recovered without modifying the running application database.
 
 Archive validation and an actual restore test provide different levels of recovery evidence. A valid archive listing alone does not prove that a database can be successfully restored.
 
@@ -651,20 +673,15 @@ Archive validation and an actual restore test provide different levels of recove
 
 The current implementation has the following remaining work:
 
-- Exercise the complete image-changing CI path using a meaningful application or image-input change.
-- Verify application tests and dependency lock-file validation when their respective inputs change.
-- Verify Docker Compose and backup-script validation when those files change.
-- Confirm that the Docker image builds successfully in GitHub Actions.
-- Confirm that Trivy installs, verifies its checksum, and scans the built image successfully.
-- Verify Docker Hub publishing for a successful image-changing push to `main`.
-- Exercise the deployment-required manifest and the new CD workflow against the homelab.
-- Verify the deployed image SHA, application readiness, database availability, and preservation of existing data.
-- Test the server-side rollback mechanism through a controlled failure scenario.
+- Deploy and verify a direct application-code change through the complete CI/CD pipeline.
+- Add integration tests against a real PostgreSQL instance.
 - Consider pinning third-party GitHub Actions to verified full commit SHAs instead of relying only on version tags.
 - Consider stronger server-side protection against stale deployments to reduce the remaining race window between the final GitHub freshness check and remote deployment.
-- Add integration tests against a real PostgreSQL instance.
 - Evaluate off-host backup storage to improve resilience against server or disk failure.
-- Expand recovery testing beyond basic archive validation and row-count checks.
+- Improve backup scheduling so that backups can run regularly even when the server remains online.
+- Expand recovery testing beyond archive validation and basic row-count checks.
+- Complete base-image and operating-system package remediation for historical Trivy findings, then perform a fresh scan.
+- Continue monitoring and validate additional alert-notification scenarios.
 
 The environment is a personal homelab used for learning and engineering practice, not a production service.
 
@@ -687,9 +704,12 @@ This lab demonstrates the development and operation of a self-hosted Flask and P
 - Application readiness verification.
 - PostgreSQL backup and recovery practices.
 - Prometheus, Node Exporter, and Grafana monitoring.
+- Controlled rollback testing.
 
-Earlier application deployments and data-preservation checks were verified. The latest workflow-only change also passed its GitHub Actions CI run, with deployment correctly skipped because no application image change was required.
+The complete image-changing CI/CD path has been exercised successfully using a dependency lockfile change. The resulting image was built, scanned, published, and deployed through the hardened workflow. Application health, database readiness, and container status were verified after deployment.
 
-The complete image-changing path of the newly hardened CI/CD workflows—including image build, Trivy scan, publishing, and remote deployment—remains pending end-to-end verification. The deployment helper includes rollback handling, but a controlled rollback test is also pending confirmation.
+The deployment helper's rollback behavior was also exercised through a controlled failure scenario.
+
+Remaining work is focused on direct application-code deployment verification, stronger backup resilience, integration testing, and remediation of historical image vulnerabilities.
 
 This project provides practical experience with Linux administration, containerization, CI/CD design, infrastructure security, monitoring, database reliability, and deployment operations in a personal homelab environment.
