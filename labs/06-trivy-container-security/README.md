@@ -300,7 +300,7 @@ The application image uses:
 
 - Python 3.12 slim as its base image.
 - Gunicorn with two workers.
-- A Docker health check targeting `/health`.
+- A Docker health check targeting `/ready`.
 - Environment variables for database connection settings.
 
 The database service has its own health check using `pg_isready`.
