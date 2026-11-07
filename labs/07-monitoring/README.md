@@ -33,7 +33,7 @@ Ubuntu Server
 |   |
 |   |-- Node Exporter
 |   |      |
-|   |      |-- Exposes host metrics
+|   |      +-- Exposes host metrics
 |   |
 |   |-- Prometheus
 |   |      |
@@ -44,12 +44,12 @@ Ubuntu Server
 |   |      +--> Alertmanager
 |   |                |
 |   |                |-- Receives firing alerts
-|   |                |-- Routes notifications
+|   |                +-- Routes notifications
 |   |
 |   +-- Grafana
 |          |
 |          |-- Uses Prometheus as its data source
-|          |-- Displays host metrics
+|          +-- Displays host metrics
 |
 |-- Localhost-bound web interfaces
        |
@@ -70,7 +70,7 @@ The deployed services include:
 - **Grafana:** Queries Prometheus and presents metrics in dashboards.
 - **Alertmanager:** Receives alerts from Prometheus and manages notification routing.
 
-The monitoring containers were verified running after a server reboot.
+The monitoring containers were also verified running after a server reboot.
 
 ## Network Exposure
 
@@ -78,7 +78,7 @@ Prometheus and Grafana are bound to the server's loopback interface rather than 
 
 This prevents their published web interfaces from being directly exposed through those ports to the local network.
 
-Node Exporter and Alertmanager are used by the monitoring stack for metrics collection and alert handling.
+Node Exporter and Alertmanager are used internally by the monitoring stack for metrics collection and alert handling.
 
 Remote access to the dashboards is provided through SSH port forwarding.
 
@@ -157,7 +157,7 @@ The rule evaluates average non-idle CPU usage per instance over a five-minute ra
 |---|---|
 | Alert name | `HighCPUUsage` |
 | Threshold | CPU usage greater than 80% |
-| Evaluation window | 5-minute rate window |
+| Rate window | 5 minutes |
 | Pending duration | 5 minutes |
 | Severity | `warning` |
 
@@ -181,13 +181,17 @@ This was a threshold simulation, not a CPU stress test. It verified the rule's e
 
 Alertmanager is integrated with Prometheus to receive firing alerts and manage notification delivery.
 
-Notification delivery was tested successfully using a Prometheus target-down alert.
+Notification delivery was tested using a Node Exporter target-down event:
 
-The notification was received through the configured email integration.
+1. Node Exporter was stopped to make the monitoring target unavailable.
+2. Prometheus detected the target-down condition and generated an alert.
+3. The firing notification was received through the configured email integration.
+4. Node Exporter was started again.
+5. The recovery notification was also received.
 
-This confirms that the alerting pipeline can deliver notifications for the tested alert.
+This verified both firing and recovery notification delivery for the tested target-down event.
 
-**Verification scope:** The successful notification test was for a target-down alert. The `HighCPUUsage` rule's pending and firing transitions were tested separately; a notification specifically triggered by that CPU rule is not claimed here.
+**Verification scope:** The `HighCPUUsage` rule's pending and firing transitions were tested separately through a temporary threshold change. Email notification delivery specifically triggered by the CPU alert has not yet been verified.
 
 Credentials, email addresses, and notification integration secrets are excluded from this public documentation.
 
@@ -202,7 +206,8 @@ The following checks were completed:
 - [x] CPU alert rule loaded with health `ok`.
 - [x] CPU alert transitioned through pending and firing during a threshold simulation.
 - [x] Original CPU alert threshold restored and final state verified.
-- [x] Alert notification successfully received for a target-down event.
+- [x] Firing email notification received for a Node Exporter target-down event.
+- [x] Recovery email notification received after Node Exporter was restored.
 - [x] Monitoring containers verified running after reboot.
 - [x] Grafana default administrator password changed.
 - [x] Web interfaces remained bound to localhost and were accessed through SSH tunnelling.
